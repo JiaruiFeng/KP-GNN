@@ -37,14 +37,10 @@ class GraphClassification(nn.Module):
 
         self.reset_parameters()
 
-    def weights_init(self,m):
-        if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight.data)
-            nn.init.zeros_(m.bias.data)
 
     def reset_parameters(self):
         self.embedding_model.reset_parameters()
-        self.classifier.apply(self.weights_init)
+        self.classifier.reset_parameters()
         if self.pooling_method == "attention":
             self.pool.reset_parameters()
 

@@ -416,3 +416,12 @@ def test_TU(model, loader, device):
             pred = model(data).max(1)[1]
         correct += pred.eq(data.y.view(-1)).sum().item()
     return correct / len(loader.dataset)
+
+
+def count_parameters(model):
+    """return the total number of parameter in the model
+    Args:
+        Model(nn.Module):pytorch model to count parameters
+    """
+    # For counting number of parameteres: need to remove unnecessary DiscreteEncoder, and other additional unused params
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)

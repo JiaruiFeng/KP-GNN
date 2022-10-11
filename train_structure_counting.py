@@ -7,8 +7,10 @@ import numpy as np
 import train_utils
 import random
 import argparse
-from data_utils import multi_hop_neighbors_with_gd_kernel,multi_hop_neighbors_with_spd_kernel,PyG_collate,resistance_distance
-from models.model_utils import make_gnn_layer,make_GNN
+from data_utils import extract_multi_hop_neighbors,PyG_collate,resistance_distance,post_transform
+from layers.input_encoder import EmbeddingEncoder
+from layers.layer_utils import make_gnn_layer
+from models.model_utils import make_GNN
 from models.GraphRegression import GraphRegression
 from torch_geometric.nn import DataParallel
 from json import dumps
@@ -62,7 +64,7 @@ def test(loader, model, task, device):
 
 def get_model(args):
     layer=make_gnn_layer(args)
-    init_emb=nn.Embedding(args.input_size,args.hidden_size)
+    init_emb=EmbeddingEncoder(args.input_size,args.hidden_size)
     GNNModel=make_GNN(args)
     gnn=GNNModel(
                   num_layer=args.num_layer,
@@ -71,6 +73,14 @@ def get_model(args):
                   norm_type=args.norm_type,
                   init_emb=init_emb,
                   residual=args.residual,
+                  virtual_node=args.virtual_node,
+                  use_rd=args.use_rd,
+                  num_hop1_edge=args.num_hop1_edge,
+                  max_edge_count=args.max_edge_count,
+                  max_hop_num=args.max_hop_num,
+                  max_distance_count=args.max_distance_count,
+                  wo_peripheral_edge=args.wo_peripheral_edge,
+                  wo_peripheral_configuration=args.wo_peripheral_configuration,
                   drop_prob=args.drop_prob)
 
     model=GraphRegression(embedding_model=gnn,
@@ -81,7 +91,6 @@ def get_model(args):
     #If use multiple gpu, torch geometric model must use DataParallel class
     if args.parallel:
         model = DataParallel(model, args.gpu_ids)
-
 
     return model
 
@@ -105,41 +114,50 @@ def main():
     parser.add_argument("--kernel",type=str,default="spd",choices=("gd","spd"),help="the kernel used for K-hop computation")
     parser.add_argument('--num_epochs',type=int,default=250,help='Number of epochs.')
     parser.add_argument('--max_grad_norm',type=float,default=5.0,help='Maximum gradient norm for gradient clipping.')
-    parser.add_argument("--hidden_size",type=int,default=256,help="hidden size of the model")
-    parser.add_argument("--model_name",type=str,default="KPGINPlus",choices=("KPGCN","KPGIN","KPGraphSAGE","KPGINPlus"),help="Jumping knowledge method")
+    parser.add_argument("--hidden_size",type=int,default=96,help="hidden size of the model")
+    parser.add_argument("--model_name",type=str,default="KPGINPlus",choices=("KPGIN","KPGINPlus"),help="Jumping knowledge method")
     parser.add_argument("--K",type=int,default=3,help="number of hop to consider")
-    parser.add_argument("--max_edge_attr_num",type=int,default=1,help="max length in edge attr of hop larger than 1. "
-                                                                      "Must be equal to or greater than 1")
-    parser.add_argument("--max_peripheral_edge_num",type=int,default=10,help="max number of edge to keep for surround edge,"
-                                                                           " 0 means no peripheral edge information")
-    parser.add_argument("--max_component_num",type=int,default=5,help="max number of component in peripheral subgraph information")
-    parser.add_argument("--use_edge_feature",type=bool,default=False,help="Whether to use edge feature")
-    parser.add_argument("--num_hop1_edge",type=int,default=3,help="number of edge type in hop 1")
+    parser.add_argument("--max_pe_num",type=int,default=50,help="Maximum number of path encoding. Must be equal to or greater than 1")
+    parser.add_argument("--max_edge_type", type=int, default=1,
+                        help="Maximum number of type of edge to consider in peripheral edge information")
+    parser.add_argument("--max_edge_count", type=int, default=50,
+                        help="Maximum count per edge type in peripheral edge information")
+    parser.add_argument("--max_hop_num", type=int, default=5,
+                        help="Maximum number of hop to consider in peripheral configuration information")
+    parser.add_argument("--max_distance_count", type=int, default=100,
+                        help="Maximum count per hop in peripheral configuration information")
+    parser.add_argument('--wo_peripheral_edge', action='store_true',
+                        help='remove peripheral edge information from model')
+    parser.add_argument('--wo_peripheral_configuration', action='store_true',
+                        help='remove peripheral node configuration from model')
+    parser.add_argument("--wo_path_encoding", action="store_true", help="remove path encoding from model")
+    parser.add_argument("--wo_edge_feature", action="store_true", help="remove edge feature from model")
+    parser.add_argument("--num_hop1_edge", type=int, default=1, help="number of edge type in hop 1")
     parser.add_argument("--num_layer",type=int,default=3,help="number of layer for feature encoder")
     parser.add_argument("--JK",type=str,default="concat",choices=("sum","max","mean","attention","last","concat"),help="Jumping knowledge method")
-    parser.add_argument("--residual",type=bool,default=False,help="Whether to use residual connection between each layer")
-    parser.add_argument("--use_rd",type=bool,default=False,help="Whether to use resistance distance as additional feature")
-    parser.add_argument('--virtual_node', type=bool, default=False,help='enable using virtual node, default true')
+    parser.add_argument("--residual",action="store_true",help="Whether to use residual connection between each layer")
+    parser.add_argument("--use_rd", action="store_true", help="Whether to add resistance distance feature to model")
+    parser.add_argument("--virtual_node",action="store_true", help="Whether add virtual node information in each layer")
     parser.add_argument("--eps",type=float,default=0.,help="Initital epsilon in GIN")
-    parser.add_argument("--train_eps",type=bool,default=False,help="Whether the epsilon is trainable")
-    parser.add_argument("--negative_slope",type=float,default=0.2,help="slope in LeakyRelu")
-    parser.add_argument("--combine",type=str,default="attention",choices=("attention","geometric"),help="Jumping knowledge method")
+    parser.add_argument("--train_eps",action="store_true",help="Whether the epsilon is trainable")
+    parser.add_argument("--combine",type=str,default="geometric",choices=("attention","geometric"),help="Jumping knowledge method")
     parser.add_argument("--pooling_method",type=str,default="sum",choices=("mean","sum","attention"),help="pooling method in graph classification")
     parser.add_argument('--norm_type',type=str,default="Batch",choices=("Batch","Layer","Instance","GraphSize","Pair"),
                         help="normalization method in model")
-    parser.add_argument('--aggr',type=str,default="add",help='aggregation method in GNN layer, only works in GraphSAGE')
     parser.add_argument('--factor',type=float,default=0.5,help='factor in the ReduceLROnPlateau learning rate scheduler')
     parser.add_argument('--patience',type=int,default=10,help='patience in the ReduceLROnPlateau learning rate scheduler')
     parser.add_argument('--reprocess',type=bool,default=True,help='Whether to reprocess the dataset')
     parser.add_argument('--runs',type=int,default=4,help='number of repeat run')
 
-
     args=parser.parse_args()
-    args.num_hopk_edge=args.max_edge_attr_num+2
-    if args.max_peripheral_edge_num>0:
-        args.name=args.model_name+"_"+str(args.K)+"_"+"ps"+"_"+args.kernel+"_"+str(args.num_layer)+"_"+str(args.hidden_size)+"_"+str(args.max_edge_attr_num)
+    if args.wo_path_encoding:
+        args.num_hopk_edge=1
     else:
-        args.name=args.model_name+"_"+str(args.K)+"_"+"nops"+"_"+args.kernel+"_"+str(args.num_layer)+"_"+str(args.hidden_size)+"_"+str(args.max_edge_attr_num)
+        args.num_hopk_edge=args.max_pe_num
+
+    args.name=args.model_name+"_"+args.kernel+"_"+str(args.K)+"_"+str(args.wo_peripheral_edge)+\
+              "_"+str(args.wo_peripheral_configuration)+"_"+str(args.wo_path_encoding)+"_"+\
+              str(args.wo_edge_feature)+"_"+str(args.task)
 
     # Set up logging and devices
     args.save_dir = train_utils.get_save_dir(args.save_dir, args.name, type=args.dataset_name)
@@ -156,18 +174,10 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
-
-    if args.kernel=="gd":
-        def pre_transform(g):
-            return multi_hop_neighbors_with_gd_kernel(g,args.K,args.max_edge_attr_num,args.max_peripheral_edge_num,
-                                                      args.max_component_num,args.use_edge_feature)
-    elif args.kernel=="spd":
-        def pre_transform(g):
-            return multi_hop_neighbors_with_spd_kernel(g,args.K,args.max_edge_attr_num,args.max_peripheral_edge_num,
-                                                       args.max_component_num,args.use_edge_feature)
-    else:
-        def pre_transform(g):
-            return g
+    def pre_transform(g):
+        return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
+                                           args.max_edge_count,
+                                           args.max_distance_count, args.kernel)
 
     if args.use_rd:
         rd_feature=resistance_distance
@@ -175,11 +185,14 @@ def main():
         def rd_feature(g):
             return g
 
+    transform=post_transform(args.wo_path_encoding,args.wo_edge_feature)
+
+
     root = 'data/subgraphcount'
     if os.path.exists(root+'/processed') and args.reprocess:
         shutil.rmtree( root+'/processed')
 
-    dataset = GraphCountDataset(root,pre_transform=T.Compose([pre_transform,rd_feature]))
+    dataset = GraphCountDataset(root,pre_transform=T.Compose([pre_transform,rd_feature]),transform=transform)
     dataset.data.y=dataset.data.y/dataset.data.y.std(0)
     train_dataset, val_dataset, test_dataset = dataset[dataset.train_idx], dataset[dataset.val_idx], dataset[dataset.test_idx]
     train_dataset = [x for x in train_dataset]

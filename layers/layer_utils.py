@@ -2,22 +2,30 @@
 Utils for defining model layers
 """
 import torch
+from layers.KPGCN import *
+from layers.KPGIN import *
+from layers.KPGINplus import *
+from layers.KPGraphSAGE import *
 
+def make_gnn_layer(args):
 
-def degree(index,num_nodes,index_mask):
-    """Compute degree in multi-hop setting
+    """function to construct gnn layer
     Args:
-        index(torch.tensor): index record the node at the end of edge
-        num_nodes(int): number of nodes in the graph
-        index_mask(torch.tensor): mask for each hop
+        args(argparser): arguments list
     """
-    #index E
-    #index_mask E*K
-    num_hop=index_mask.size(-1)
-    index=index.unsqueeze(-1) #  E * 1
-    index=index.tile([1,num_hop]) #  E * K
-    out = torch.zeros((num_nodes,num_hop ), device=index.device) # N * K
-    one = (index_mask>0).to(out.dtype) # E * K
-    return out.scatter_add_(0, index, one)
+    model_name=args.model_name
+    if model_name=="KPGCN":
+        gnn_layer=KPGCNConv(args.hidden_size,args.hidden_size,args.K,args.num_hop1_edge,args.max_pe_num,args.combine)
+    elif model_name=="KPGIN":
+        gnn_layer=KPGINConv(args.hidden_size,args.hidden_size,args.K,args.eps,args.train_eps,args.num_hop1_edge,args.max_pe_num,args.combine)
+    elif model_name=="KPGraphSAGE":
+        gnn_layer=KPGraphSAGEConv(args.hidden_size,args.hidden_size,args.K,args.aggr,args.num_hop1_edge,args.max_pe_num,args.combine)
+    elif model_name=="KPGINPlus":
+        gnn_layer=[KPGINPlusConv(args.hidden_size,args.hidden_size,l,args.num_hop1_edge,args.max_pe_num,args.combine)
+                   if l<=args.K else KPGINPlusConv(args.hidden_size,args.hidden_size,args.K,args.num_hop1_edge,args.max_pe_num,args.combine)
+                   for l in range(1,args.num_layer+1)]
+    else:
+        raise ValueError("Not supported GNN type")
 
+    return gnn_layer
 

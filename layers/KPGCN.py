@@ -3,10 +3,26 @@ KP-GNN GCN layer
 """
 import torch.nn.functional as F
 from torch_geometric.nn import MessagePassing
-from .layer_utils import degree
 from .combine import *
 from torch_geometric.utils import add_self_loops
-from .mol_encoder import BondEncoder
+from .feature_encoder import BondEncoder
+import math
+
+def degree(index,num_nodes,index_mask):
+    """Compute degree in multi-hop setting
+    Args:
+        index(torch.tensor): index record the node at the end of edge
+        num_nodes(int): number of nodes in the graph
+        index_mask(torch.tensor): mask for each hop
+    """
+    #index E
+    #index_mask E*K
+    num_hop=index_mask.size(-1)
+    index=index.unsqueeze(-1) #  E * 1
+    index=index.tile([1,num_hop]) #  E * K
+    out = torch.zeros((num_nodes,num_hop ), device=index.device) # N * K
+    one = (index_mask>0).to(out.dtype) # E * K
+    return out.scatter_add_(0, index, one)
 
 
 class KPGCNConv(MessagePassing):
@@ -16,15 +32,11 @@ class KPGCNConv(MessagePassing):
         input_size(int): the size of input feature
         output_size(int): the size of output feature
         K(int): number of hop to consider in Convolution layer
-        num_hop1_edge(int): number of edge type at 1 hop, need to be equal or larger than 3. default is 3.
-                            Where index 0 represent mask(no edge), index 1 represent self-loop, index 2 represent edge.
-                            larger than 2 means edge features if have.
-        num_hopk_edge(int): number of edge type higher than 1 hop, need to be equal or larger than 3. default is 3.
-                    Where index 0 represent mask(no edge), index 1 represent self-loop, index 2 represent edge.
-                    larger than 2 means edge features if have.
+        num_hop1_edge(int): number of edge type at 1 hop
+        num_pe(int): maximum number of path encoding, larger or equal to 1
         combine(str): combination method for information in different hop. select from(geometric, attention)
     """
-    def __init__(self,input_size,output_size,K,num_hop1_edge=3,num_hopk_edge=3,combine="geometric"):
+    def __init__(self,input_size,output_size,K,num_hop1_edge=1,num_pe=1,combine="geometric"):
         super(KPGCNConv, self).__init__(node_dim=0)
         self.aggr="add"
         self.K=K
@@ -38,15 +50,16 @@ class KPGCNConv(MessagePassing):
         # Notice that in hops larger than one, there is no actually edge feature, therefore need addtional embedding layer to encode
         # self defined features like path encoding
 
-        self.hop1_edge_emb = torch.nn.Embedding(num_hop1_edge, self.output_dk,padding_idx=0)
+        self.hop1_edge_emb = torch.nn.Embedding(num_hop1_edge+2, self.output_dk,padding_idx=0)
         #If K larger than 1, define additional embedding and combine function
         if self.K>1:
-            self.hopk_edge_emb = torch.nn.Embedding(num_hopk_edge, self.output_dk,padding_idx=0)
+            self.hopk_edge_emb = torch.nn.Embedding(num_pe+2, self.output_dk,padding_idx=0)
+            self.hopk_node_path_emb=torch.nn.Embedding(num_pe,self.output_dk,padding_idx=0)
             self.combine_proj = nn.Linear(self.output_dk,output_size)
             if combine == "attention":
                 self.combine = AttentionCombine(self.output_dk, self.K)
             elif combine == "geometric":
-                self.combine = GeometricCombine(self.K)
+                self.combine = GeometricCombine(self.K,self.output_dk)
             else:
                 raise ValueError("Not implemented combine function")
 
@@ -56,19 +69,20 @@ class KPGCNConv(MessagePassing):
             self.combine_proj=nn.Identity()
         self.reset_parameters()
 
-    def weights_init(self,m):
-        if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight.data)
-            nn.init.zeros_(m.bias.data)
 
     def reset_parameters(self):
         self.hop1_edge_emb.reset_parameters()
-        self.hop_proj.apply(self.weights_init)
-        if self.hopk_edge_emb is not None:
-            nn.init.xavier_uniform_(self.hopk_edge_emb.weight.data)
+        self.hop_proj.reset_parameters()
+        if self.K>1:
+            self.hopk_edge_emb.reset_parameters()
+            self.hopk_node_path_emb.reset_parameters()
+            self.combine.reset_parameters()
+        if isinstance(self.combine_proj,nn.Linear):
+            self.combine_proj.reset_parameters()
 
 
-    def forward(self,x,edge_index,edge_attr,peripheral_attr=None):
+
+    def forward(self,x,edge_index,edge_attr,pe_attr,peripheral_attr=None):
 
         batch_num_node=x.size(0)
 
@@ -87,6 +101,8 @@ class KPGCNConv(MessagePassing):
         #embedding of edge
         e1_emb = self.hop1_edge_emb(edge_attr[:,:1]) # E * 1 * dk
         if self.K>1:
+            pe = self.hopk_node_path_emb(pe_attr)
+            x[:, 1:] = x[:, 1:] + pe
             ek_emb = self.hopk_edge_emb(edge_attr[:,1:]) # E * K-1 * dk
             e_emb = torch.cat([e1_emb,ek_emb],dim=-2) # E * K * dk
         else:
@@ -96,27 +112,19 @@ class KPGCNConv(MessagePassing):
         deg = degree(col, x.size(0), edge_attr) # N * K
         deg_inv_sqrt = deg.pow(-0.5)  # N * K
         norm = deg_inv_sqrt[row,...] * deg_inv_sqrt[col,...] # E * K
-        x=self.propagate(edge_index, x=x, norm=norm,edge_attr=e_emb, mask=edge_attr) # N * K * dk
+        x=self.propagate(edge_index, x=x, norm=norm,edge_emb=e_emb, mask=edge_attr) # N * K * dk
 
-        #add peripheral subgraph information
+        # add peripheral subgraph information
         if peripheral_attr is not None:
-            se_emb = self.hop1_edge_emb(peripheral_attr) # N * K * c * E' * dk
-            se_emb.masked_fill_(peripheral_attr.unsqueeze(-1)==0,0.)
-            se_emb=torch.sum(se_emb,dim=-2) # N * K * c * dk
-            total=torch.sum((peripheral_attr>0).int(),dim=-1).unsqueeze(-1) # N * K * c * 1
-            total[total==0]=1
-            se_emb=se_emb/total
-            se_emb=torch.sum(se_emb,dim=-2) # N * K * dk
-            x=x+se_emb
-
+            x=x+peripheral_attr
         #combine
         x=self.combine_proj(self.combine(x))
 
         return x
 
 
-    def message(self, x_j,edge_attr,norm,mask):
-        x_j=norm.unsqueeze(-1)*(x_j+edge_attr) # E * K * H
+    def message(self, x_j,edge_emb,norm,mask):
+        x_j=norm.unsqueeze(-1)*(x_j+edge_emb) # E * K * H
         mask=mask.unsqueeze(-1) # E * K * 1
         return x_j.masked_fill_(mask==0, 0.)
 
