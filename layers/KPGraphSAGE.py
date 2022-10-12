@@ -71,15 +71,16 @@ class KPGraphSAGEConv(MessagePassing):
             self.combine_proj.reset_parameters()
 
 
-    def forward(self,x,edge_index,edge_attr,pe_attr,peripheral_attr=None):
+    def forward(self,x,edge_index,edge_attr,pe_attr=None,peripheral_attr=None):
 
         x=x.view(-1,self.K,self.input_dk) # N * K * dk
 
         #embedding of edge
         e1_emb = self.hop1_edge_emb(edge_attr[:,:1]) # E * 1 * dk
         if self.K>1:
-            pe = self.hopk_node_path_emb(pe_attr)
-            x[:, 1:] = x[:, 1:] + pe
+            if pe_attr is not None:
+                pe = self.hopk_node_path_emb(pe_attr)
+                x[:, 1:] = x[:, 1:] + pe
             ek_emb = self.hopk_edge_emb(edge_attr[:,1:]) # E * K-1 * dk
             e_emb = torch.cat([e1_emb,ek_emb],dim=-2) # E * K * dk
         else:
