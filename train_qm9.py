@@ -97,11 +97,10 @@ def train(model, train_loader, optimizer, device):
         optimizer.step()
     return loss_all / len(train_loader.dataset)
 
-
+@torch.no_grad()
 def test(model, loader, task, std, device):
     model.eval()
     error = 0
-
     for data in loader:
         if type(data) == dict:
             data = {key: data_.to(device) for key, data_ in data.items()}
