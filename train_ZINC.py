@@ -18,7 +18,6 @@ import torch.nn.functional as F
 from functools import partial
 import torch.utils.data as data
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from train_utils import MultiStepLRWarmUp
 from torch_geometric.nn import DataParallel
 import argparse
 from data_utils import extract_multi_hop_neighbors,PyG_collate,resistance_distance,post_transform
