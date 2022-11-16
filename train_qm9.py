@@ -3,18 +3,18 @@ script to train on QM9 task
 """
 
 import argparse
-import numpy as np
 import os
 import random
 import shutil
+from json import dumps
+
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torch_geometric.transforms as T
-from json import dumps
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
-from torch_geometric.nn import DataParallel
 from tqdm import tqdm
 
 import train_utils
@@ -51,8 +51,8 @@ def get_model(args):
                             pooling_method=args.pooling_method)
 
     model.reset_parameters()
-    if args.parallel:
-        model = DataParallel(model, args.gpu_ids)
+    # if args.parallel:
+    #    model = DataParallel(model, args.gpu_ids)
 
     return model
 
@@ -96,6 +96,7 @@ def train(model, train_loader, optimizer, device):
         loss_all += loss * num_graphs
         optimizer.step()
     return loss_all / len(train_loader.dataset)
+
 
 @torch.no_grad()
 def test(model, loader, task, std, device):

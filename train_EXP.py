@@ -11,15 +11,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.utils.data as data
 import torch_geometric.transforms as T
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch_geometric.nn import DataParallel
+from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
 import train_utils
-from data_utils import extract_multi_hop_neighbors, PyG_collate, resistance_distance, post_transform
+from data_utils import extract_multi_hop_neighbors, resistance_distance, post_transform
 from datasets.PlanarSATPairsDataset import PlanarSATPairsDataset
 from layers.input_encoder import EmbeddingEncoder
 from layers.layer_utils import make_gnn_layer
@@ -54,8 +53,8 @@ def get_model(args):
                                 output_size=args.output_size)
 
     model.reset_parameters()
-    if args.parallel:
-        model = DataParallel(model, args.gpu_ids)
+    # if args.parallel:
+    #    model = DataParallel(model, args.gpu_ids)
 
     return model
 
@@ -76,12 +75,12 @@ def val(data_loader, model, device):
     loss_all = 0
     with torch.no_grad(), \
             tqdm(total=len(data_loader.dataset)) as progress_bar:
-        for batch_graphs in data_loader:
-            batch_graphs = batch_graphs.to(device)
-            batch_size = batch_graphs.num_graphs
-            predict = model(batch_graphs)
+        for graphs in data_loader:
+            graphs = graphs.to(device)
+            batch_size = graphs.num_graphs
+            predict = model(graphs)
             predict = F.log_softmax(predict, dim=-1)
-            loss = F.nll_loss(predict, batch_graphs.y, reduction='sum').item()
+            loss = F.nll_loss(predict, graphs.y, reduction='sum').item()
             loss_all += loss
             progress_bar.update(batch_size)
 
@@ -185,10 +184,12 @@ def main():
     args.save_dir = train_utils.get_save_dir(args.save_dir, args.name, type=args.dataset_name)
     log = train_utils.get_logger(args.save_dir, args.name)
     device, args.gpu_ids = train_utils.get_available_devices()
+
     if len(args.gpu_ids) > 1:
         args.parallel = True
     else:
         args.parallel = False
+
     args.batch_size *= max(1, len(args.gpu_ids))
 
     # Set random seed
@@ -271,12 +272,11 @@ def main():
         val_dataset = train_dataset[val_mask]
         train_dataset = train_dataset[~val_mask]
 
-        val_loader = data.DataLoader(val_dataset, batch_size=args.batch_size, collate_fn=PyG_collate)
-        test_loader = data.DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=PyG_collate)
-        test_exp_loader = data.DataLoader(test_exp_dataset, batch_size=args.batch_size,
-                                          collate_fn=PyG_collate)  # These are the new test splits
-        test_lrn_loader = data.DataLoader(test_lrn_dataset, batch_size=args.batch_size, collate_fn=PyG_collate)
-        train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=PyG_collate)
+        val_loader = DataLoader(val_dataset, batch_size=args.batch_size)
+        test_loader = DataLoader(test_dataset, batch_size=args.batch_size)
+        test_exp_loader = DataLoader(test_exp_dataset, batch_size=args.batch_size)  # These are the new test splits
+        test_lrn_loader = DataLoader(test_lrn_dataset, batch_size=args.batch_size)
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
         best_val_loss, best_test_acc, best_train_acc = 100, 0, 0
         for epoch in range(args.num_epochs):
             log.info(f'Starting epoch {epoch + 1}...')

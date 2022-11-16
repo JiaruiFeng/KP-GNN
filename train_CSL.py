@@ -14,7 +14,6 @@ import torch_geometric.transforms as T
 from torch.optim import Adam
 from torch_geometric.data import DataLoader
 from torch_geometric.datasets import GNNBenchmarkDataset
-from torch_geometric.nn import DataParallel
 
 import train_utils
 from data_utils import extract_multi_hop_neighbors, PyG_collate, post_transform, resistance_distance
@@ -77,8 +76,8 @@ def get_model(args):
                                 output_size=args.output_size)
 
     model.reset_parameters()
-    if args.parallel:
-        model = DataParallel(model, args.gpu_ids)
+    # if args.parallel:
+    #    model = DataParallel(model, args.gpu_ids)
 
     return model
 

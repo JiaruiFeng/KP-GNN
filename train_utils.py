@@ -1,14 +1,16 @@
 """
 util file for training
 """
-import torch
+import logging
 import os
 import queue
 import shutil
-import logging
-from tqdm import tqdm
-from sklearn.model_selection import StratifiedKFold, KFold
+
+import torch
 import torch.nn.functional as F
+from sklearn.model_selection import StratifiedKFold, KFold
+from tqdm import tqdm
+
 
 class AverageMeter:
     """Keep track of average values over time.
@@ -16,6 +18,7 @@ class AverageMeter:
     Adapted from:
         > https://github.com/pytorch/examples/blob/master/imagenet/main.py
     """
+
     def __init__(self):
         self.avg = 0
         self.sum = 0
@@ -44,6 +47,7 @@ class EMA:
         model (torch.nn.Module): Model with parameters whose EMA will be kept.
         decay (float): Decay rate for exponential moving average.
     """
+
     def __init__(self, model, decay):
         self.decay = decay
         self.shadow = {}
@@ -104,6 +108,7 @@ class CheckpointSaver:
             minimizes the metric.
         log (logging.Logger): Optional logger for printing information.
     """
+
     def __init__(self, save_dir, max_checkpoints, metric_name,
                  maximize_metric=False, log=None):
         super(CheckpointSaver, self).__init__()
@@ -149,8 +154,8 @@ class CheckpointSaver:
             device (torch.device): Device where model resides.
         """
 
-        checkpoint_path = os.path.join(self.save_dir,f'step_{step}')
-        for name,model in model_dict.items():
+        checkpoint_path = os.path.join(self.save_dir, f'step_{step}')
+        for name, model in model_dict.items():
             ckpt_dict = {
                 'model_name': model.__class__.__name__,
                 'model_state': model.cpu().state_dict(),
@@ -269,12 +274,14 @@ def get_logger(log_dir, name):
     Returns:
         logger (logging.Logger): Logger instance for logging events.
     """
+
     class StreamHandlerWithTQDM(logging.Handler):
         """Let `logging` print without breaking `tqdm` progress bars.
 
         See Also:
             > https://stackoverflow.com/questions/38543506
         """
+
         def emit(self, record):
             try:
                 msg = self.format(record)
@@ -313,7 +320,7 @@ def get_logger(log_dir, name):
     return logger
 
 
-def k_fold(dataset, folds,seed):
+def k_fold(dataset, folds, seed):
     skf = StratifiedKFold(folds, shuffle=True, random_state=seed)
 
     test_indices, train_indices = [], []
@@ -331,7 +338,7 @@ def k_fold(dataset, folds,seed):
     return train_indices, test_indices, val_indices
 
 
-def k_fold2(dataset, folds,seed):
+def k_fold2(dataset, folds, seed):
     kf = KFold(folds, shuffle=True, random_state=seed)
 
     test_indices, train_indices = [], []
@@ -359,6 +366,7 @@ def num_graphs(data):
     else:
         return data.x.size(0)
 
+
 def train_TU(model, optimizer, loader, device):
     """Training for one epoch on TU dataset
     Args:
@@ -374,12 +382,13 @@ def train_TU(model, optimizer, loader, device):
         optimizer.zero_grad()
         data = data.to(device)
         out = model(data)
-        out =F.log_softmax(out,dim=-1)
+        out = F.log_softmax(out, dim=-1)
         loss = F.nll_loss(out, data.y.view(-1))
         loss.backward()
         total_loss += loss.item() * num_graphs(data)
         optimizer.step()
     return total_loss / len(loader.dataset)
+
 
 def val_TU(model, loader, device):
     """validation of model using val set on TU dataset
@@ -395,7 +404,7 @@ def val_TU(model, loader, device):
         data = data.to(device)
         with torch.no_grad():
             out = model(data)
-            out =F.log_softmax(out,dim=-1)
+            out = F.log_softmax(out, dim=-1)
         loss += F.nll_loss(out, data.y.view(-1), reduction='sum').item()
     return loss / len(loader.dataset)
 
