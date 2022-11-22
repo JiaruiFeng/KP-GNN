@@ -1,9 +1,9 @@
 """
 Graph substructure counting dataset
 """
-import torch
-import  numpy as np
+import numpy as np
 import scipy.io as sio
+import torch
 # from math import comb
 from scipy.special import comb
 from torch_geometric.data import InMemoryDataset
@@ -71,5 +71,3 @@ class GraphCountDataset(InMemoryDataset):
 
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
-
-

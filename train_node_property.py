@@ -15,11 +15,11 @@ import torch
 import torch_geometric.transforms as T
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import DataLoader
-from tqdm import tqdm
+from torch_geometric.loader import DataListLoader, DataLoader
+from torch_geometric.nn import DataParallel
 
 import train_utils
-from data_utils import extract_multi_hop_neighbors, PyG_collate, resistance_distance, post_transform
+from data_utils import extract_multi_hop_neighbors, resistance_distance, post_transform
 from datasets.GraphPropertyDataset import GraphPropertyDataset
 from layers.input_encoder import LinearEncoder
 from layers.layer_utils import make_gnn_layer
@@ -28,40 +28,43 @@ from models.model_utils import make_GNN
 
 
 # os.environ["CUDA_LAUNCH_BLOCKING"]="1"
-def train(train_loader, model, task, optimizer, device):
+def train(loader, model, task, optimizer, device, parallel=False):
+    model.train()
     total_loss = 0
     N = 0
-    with torch.enable_grad(), \
-            tqdm(total=len(train_loader.dataset)) as progress_bar:
-        for data in train_loader:
+    for data in loader:
+        optimizer.zero_grad()
+        if parallel:
+            num_nodes = sum([d.num_nodes for d in data])
+            y = torch.cat([d.pos for d in data]).to(device)
+        else:
+            num_nodes = data.num_nodes
             data = data.to(device)
-            batch_size = data.num_graphs
-            optimizer.zero_grad()
-            loss = (model(data).squeeze() - data.pos[:, task:task + 1].squeeze()).square().mean()
-
-            loss.backward()
-            total_loss += loss.item() * data.num_nodes
-            N += data.num_nodes
-            optimizer.step()
-            progress_bar.update(batch_size)
+            y = data.pos
+        loss = (model(data).squeeze() - y[:, task:task + 1].squeeze()).square().mean()
+        loss.backward()
+        total_loss += loss.item() * num_nodes
+        N += num_nodes
+        optimizer.step()
 
     return np.log10(total_loss / N)
 
 
 @torch.no_grad()
-def test(loader, model, task, device):
+def test(loader, model, task, device, parallel=False):
     model.eval()
     total_error = 0
     N = 0
-    with torch.no_grad(), \
-            tqdm(total=len(loader.dataset)) as progress_bar:
-        for data in loader:
+    for data in loader:
+        if parallel:
+            num_nodes = sum([d.num_nodes for d in data])
+            y = torch.cat([d.pos for d in data]).to(device)
+        else:
             data = data.to(device)
-            batch_size = data.num_graphs
-            total_error += (model(data).squeeze() - data.pos[:, task:task + 1].squeeze()).square().sum().item()
-            N += data.num_nodes
-            progress_bar.update(batch_size)
-    model.train()
+            num_nodes = data.num_nodes
+            y = data.pos
+        total_error += (model(data).squeeze() - y[:, task:task + 1].squeeze()).square().sum().item()
+        N += num_nodes
     return np.log10(total_error / N)
 
 
@@ -85,15 +88,11 @@ def get_model(args):
         wo_peripheral_edge=args.wo_peripheral_edge,
         wo_peripheral_configuration=args.wo_peripheral_configuration,
         drop_prob=args.drop_prob)
-
     model = NodeRegression(embedding_model=gnn)
-
     model.reset_parameters()
 
-    # If use multiple gpu, torch geometric model must use DataParallel class
-    # if args.parallel:
-    #    model = DataParallel(model, args.gpu_ids)
-
+    if args.parallel:
+        model = DataParallel(model, args.gpu_ids)
     return model
 
 
@@ -107,6 +106,8 @@ def main():
                         help='Probability of zeroing an activation in dropout layers.')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size per GPU. Scales automatically when \
                             multiple GPUs are available.')
+    parser.add_argument("--parallel", action="store_true",
+                        help="If true, use DataParallel for multi-gpu training")
     parser.add_argument('--num_workers', type=int, default=0, help='number of worker.')
     parser.add_argument('--load_path', type=str, default=None, help='Path to load as a model checkpoint.')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate.')
@@ -115,7 +116,6 @@ def main():
     parser.add_argument("--kernel", type=str, default="spd", choices=("gd", "spd"),
                         help="the kernel used for K-hop computation")
     parser.add_argument('--num_epochs', type=int, default=250, help='Number of epochs.')
-    parser.add_argument('--max_grad_norm', type=float, default=5.0, help='Maximum gradient norm for gradient clipping.')
     parser.add_argument("--hidden_size", type=int, default=128, help="hidden size of the model")
     parser.add_argument("--model_name", type=str, default="KPGINPlus", choices=("KPGIN", "KPGINPlus"),
                         help="Jumping knowledge method")
@@ -173,11 +173,16 @@ def main():
     args.save_dir = train_utils.get_save_dir(args.save_dir, args.name, type=args.dataset_name + "_node")
     log = train_utils.get_logger(args.save_dir, args.name)
     device, args.gpu_ids = train_utils.get_available_devices()
-    if len(args.gpu_ids) > 1:
+    if len(args.gpu_ids) > 1 and args.parallel:
+        log.info(f'Using multi-gpu training')
         args.parallel = True
+        loader = DataListLoader
+        args.batch_size *= max(1, len(args.gpu_ids))
     else:
+        log.info(f'Using single-gpu training')
         args.parallel = False
-    args.batch_size *= max(1, len(args.gpu_ids))
+        loader = DataLoader
+
     # Set random seed
     log.info(f'Using random seed {args.seed}...')
     random.seed(args.seed)
@@ -185,7 +190,7 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    def pre_transform(g):
+    def multihop_transform(g):
         return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
                                            args.max_edge_count,
                                            args.max_distance_count, args.kernel)
@@ -203,11 +208,11 @@ def main():
     if os.path.exists(path + '/processed') and args.reprocess:
         shutil.rmtree(path + '/processed')
 
-    train_dataset = GraphPropertyDataset(path, split='train', pre_transform=T.Compose([pre_transform, rd_feature]),
+    train_dataset = GraphPropertyDataset(path, split='train', pre_transform=T.Compose([multihop_transform, rd_feature]),
                                          transform=transform)
-    val_dataset = GraphPropertyDataset(path, split='val', pre_transform=T.Compose([pre_transform, rd_feature]),
+    val_dataset = GraphPropertyDataset(path, split='val', pre_transform=T.Compose([multihop_transform, rd_feature]),
                                        transform=transform)
-    test_dataset = GraphPropertyDataset(path, split='test', pre_transform=T.Compose([pre_transform, rd_feature]),
+    test_dataset = GraphPropertyDataset(path, split='test', pre_transform=T.Compose([multihop_transform, rd_feature]),
                                         transform=transform)
     train_dataset = [x for x in train_dataset]
     val_dataset = [x for x in val_dataset]
@@ -219,40 +224,34 @@ def main():
     # output argument to log file
     log.info(f'Args: {dumps(vars(args), indent=4, sort_keys=True)}')
 
-    train_loader = DataLoader(train_dataset, args.batch_size, shuffle=True, num_workers=args.num_workers,
-                              collate_fn=PyG_collate)
-    val_loader = DataLoader(val_dataset, args.batch_size, shuffle=False,
-                            num_workers=args.num_workers, collate_fn=PyG_collate)
-    test_loader = DataLoader(test_dataset, args.batch_size, shuffle=False,
-                             num_workers=args.num_workers, collate_fn=PyG_collate)
+    train_loader = loader(train_dataset, args.batch_size, shuffle=True, num_workers=args.num_workers)
+    val_loader = loader(val_dataset, args.batch_size, shuffle=False, num_workers=args.num_workers)
+    test_loader = loader(test_dataset, args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     test_perfs = []
     vali_perfs = []
     for run in range(1, args.runs + 1):
 
         model = get_model(args)
-        model.reset_parameters()
         model.to(device)
         optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.l2_wd)
         scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=args.factor, patience=args.patience)
-
         start_outer = time.time()
         best_val_perf = test_perf = float('inf')
         for epoch in range(1, args.num_epochs + 1):
             start = time.time()
-            model.train()
-            train_loss = train(train_loader, model, args.task, optimizer, device=device)
-            val_perf = test(val_loader, model, args.task, device=device)
+            train_loss = train(train_loader, model, args.task, optimizer, device=device, parallel=args.parallel)
+            val_perf = test(val_loader, model, args.task, device=device, parallel=args.parallel)
             lr = optimizer.param_groups[0]['lr']
             scheduler.step(val_perf)
             if val_perf < best_val_perf:
                 best_val_perf = val_perf
-                test_perf = test(test_loader, model, args.task, device=device)
+                test_perf = test(test_loader, model, args.task, device=device, parallel=args.parallel)
             time_per_epoch = time.time() - start
 
             # logger here
             log.info(f'Epoch: {epoch:03d}, Train Loss: {train_loss:.4f}, '
-                     f'Val: {val_perf:.4f}, Test: {test_perf:.4f}, lr:{lr:.7f}, Seconds: {time_per_epoch:.4f}, ')
+                     f'Val: {val_perf:.4f}, Test: {test_perf:.4f}, lr:{lr:.7f}, Seconds: {time_per_epoch:.4f}')
 
             if optimizer.param_groups[0]['lr'] < args.min_lr:
                 log.info("\n!! LR EQUAL TO MIN LR SET.")
@@ -261,7 +260,7 @@ def main():
 
         time_average_epoch = time.time() - start_outer
         log.info(
-            f'Run {run}, Vali: {best_val_perf}, Test: {test_perf}, Seconds/epoch: {time_average_epoch / args.num_epochs}')
+            f'Run {run}, Vali: {best_val_perf}, Test: {test_perf}, Seconds/epoch: {time_average_epoch / epoch}')
         test_perfs.append(test_perf)
         vali_perfs.append(best_val_perf)
 
@@ -270,8 +269,7 @@ def main():
     log.info("-" * 50)
     # logger.info(cfg)
     log.info(
-        f'Final Vali: {vali_perf.mean():.4f} ± {vali_perf.std():.4f}, Final Test: {test_perf.mean():.4f} ± {test_perf.std():.4f},'
-        f'Seconds/epoch: {time_average_epoch / args.num_epochs}')
+        f'Final Vali: {vali_perf.mean():.4f} ± {vali_perf.std():.4f}, Final Test: {test_perf.mean():.4f} ± {test_perf.std():.4f}')
 
 
 if __name__ == "__main__":

@@ -5,17 +5,17 @@ import argparse
 import os
 import random
 import shutil
+import time
 from json import dumps
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric.transforms as T
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch_geometric.loader import DataLoader
-from tqdm import tqdm
+from torch_geometric.loader import DataListLoader, DataLoader
+from torch_geometric.nn import DataParallel
 
 import train_utils
 from data_utils import extract_multi_hop_neighbors, resistance_distance, post_transform
@@ -53,59 +53,74 @@ def get_model(args):
                                 output_size=args.output_size)
 
     model.reset_parameters()
-    # if args.parallel:
-    #    model = DataParallel(model, args.gpu_ids)
+    if args.parallel:
+        model = DataParallel(model, args.gpu_ids)
 
     return model
 
 
-class MyFilter(object):
-    def __call__(self, data):
-        return True  # No Filtering
+def node_feature_transform(data):
+    data.x = data.x[:, 0].to(torch.long)
+    return data
 
 
-class MyPreTransform(object):
-    def __call__(self, data):
-        data.x = data.x[:, 0].to(torch.long)
-        return data
+def train(loader, model, optimizer, device, parallel=False):
+    model.train()
+    total_loss = 0
+    for data in loader:
+        optimizer.zero_grad()
+        if parallel:
+            num_graphs = len(data)
+            y = torch.cat([d.y for d in data]).to(device)
+        else:
+            num_graphs = data.num_graphs
+            data = data.to(device)
+            y = data.y
+        out = model(data)
+        predict = F.log_softmax(out, dim=-1)
+        loss = F.nll_loss(predict, y)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * num_graphs
+    return total_loss / len(loader.dataset)
 
 
-def val(data_loader, model, device):
+@torch.no_grad()
+def val(loader, model, device, parallel=False):
     model.eval()
     loss_all = 0
-    with torch.no_grad(), \
-            tqdm(total=len(data_loader.dataset)) as progress_bar:
-        for graphs in data_loader:
-            graphs = graphs.to(device)
-            batch_size = graphs.num_graphs
-            predict = model(graphs)
-            predict = F.log_softmax(predict, dim=-1)
-            loss = F.nll_loss(predict, graphs.y, reduction='sum').item()
-            loss_all += loss
-            progress_bar.update(batch_size)
+    for data in loader:
+        if parallel:
+            y = torch.cat([d.y for d in data]).to(device)
+        else:
+            data = data.to(device)
+            y = data.y
+        predict = model(data)
+        predict = F.log_softmax(predict, dim=-1)
+        loss = F.nll_loss(predict, y, reduction='sum').item()
+        loss_all += loss
 
-    model.train()
-    return loss_all / len(data_loader.dataset)
+    return loss_all / len(loader.dataset)
 
 
-def test(data_loader, model, device):
+@torch.no_grad()
+def test(loader, model, device, parallel=False):
     model.eval()
     correct = 0
-    with torch.no_grad(), \
-            tqdm(total=len(data_loader.dataset)) as progress_bar:
-        for batch_graphs in data_loader:
-            batch_graphs = batch_graphs.to(device)
-            batch_size = batch_graphs.num_graphs
-            nb_trials = 1  # Support majority vote, but single trial is default
-            successful_trials = torch.zeros_like(batch_graphs.y)
-            for i in range(nb_trials):  # Majority Vote
-                pred = model(batch_graphs).max(1)[1]
-                successful_trials += pred.eq(batch_graphs.y)
-            successful_trials = successful_trials > (nb_trials // 2)
-            correct += successful_trials.sum().item()
-            progress_bar.update(batch_size)
-    model.train()
-    return correct / len(data_loader.dataset)
+    for data in loader:
+        if parallel:
+            y = torch.cat([d.y for d in data]).to(device)
+        else:
+            data = data.to(device)
+            y = data.y
+        nb_trials = 1  # Support majority vote, but single trial is default
+        successful_trials = torch.zeros_like(y)
+        for i in range(nb_trials):  # Majority Vote
+            pred = model(data).max(1)[1]
+            successful_trials += pred.eq(y)
+        successful_trials = successful_trials > (nb_trials // 2)
+        correct += successful_trials.sum().item()
+    return correct / len(loader.dataset)
 
 
 def main():
@@ -117,15 +132,15 @@ def main():
                         help='Probability of zeroing an activation in dropout layers.')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size per GPU. Scales automatically when \
                             multiple GPUs are available.')
+    parser.add_argument("--parallel", action="store_true",
+                        help="If true, use DataParallel for multi-gpu training")
     parser.add_argument('--num_workers', type=int, default=0, help='Number of worker.')
     parser.add_argument('--load_path', type=str, default=None, help='Path to load as a model checkpoint.')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate.')
-    parser.add_argument('--min_lr', type=float, default=1e-6, help='Minimum Learning rate.')
     parser.add_argument('--l2_wd', type=float, default=3e-7, help='L2 weight decay.')
     parser.add_argument("--kernel", type=str, default="spd", choices=("gd", "spd"),
                         help="The kernel used for K-hop neighbors extraction")
     parser.add_argument('--num_epochs', type=int, default=40, help='Number of epochs.')
-    parser.add_argument('--max_grad_norm', type=float, default=5.0, help='Maximum gradient norm for gradient clipping.')
     parser.add_argument("--hidden_size", type=int, default=48, help="Hidden size of the model")
     parser.add_argument("--model_name", type=str, default="KPGIN",
                         choices=("KPGCN", "KPGIN", "KPGraphSAGE", "KPGINPlus"), help="Base GNN model")
@@ -166,10 +181,6 @@ def main():
     parser.add_argument('--aggr', type=str, default="add",
                         help='aggregation method in GNN layer, only works in GraphSAGE')
     parser.add_argument('--split', type=int, default=10, help='number of fold in cross validation')
-    parser.add_argument('--factor', type=float, default=0.5,
-                        help='factor in the ReduceLROnPlateau learning rate scheduler')
-    parser.add_argument('--patience', type=int, default=5,
-                        help='patience in the ReduceLROnPlateau learning rate scheduler')
     parser.add_argument('--reprocess', action="store_true", help='Whether to reprocess the dataset')
     args = parser.parse_args()
     if args.wo_path_encoding:
@@ -185,12 +196,15 @@ def main():
     log = train_utils.get_logger(args.save_dir, args.name)
     device, args.gpu_ids = train_utils.get_available_devices()
 
-    if len(args.gpu_ids) > 1:
+    if len(args.gpu_ids) > 1 and args.parallel:
+        log.info(f'Using multi-gpu training')
         args.parallel = True
+        loader = DataListLoader
+        args.batch_size *= max(1, len(args.gpu_ids))
     else:
+        log.info(f'Using single-gpu training')
         args.parallel = False
-
-    args.batch_size *= max(1, len(args.gpu_ids))
+        loader = DataLoader
 
     # Set random seed
     log.info(f'Using random seed {args.seed}...')
@@ -199,7 +213,7 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    def pre_transform(g):
+    def multihop_transform(g):
         return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
                                            args.max_edge_count,
                                            args.max_distance_count, args.kernel)
@@ -216,9 +230,8 @@ def main():
         shutil.rmtree(path + '/processed')
 
     dataset = PlanarSATPairsDataset(root=path,
-                                    pre_transform=T.Compose([MyPreTransform(), pre_transform, rd_feature]),
-                                    transform=transform,
-                                    pre_filter=MyFilter())
+                                    pre_transform=T.Compose([node_feature_transform, multihop_transform, rd_feature]),
+                                    transform=transform)
 
     # additional parameter for EXP dataset and training
     args.input_size = 2
@@ -237,16 +250,13 @@ def main():
     tr_acc = []
 
     for i in range(args.split):
-        log.info(f"---------------Training on fold {i}------------------------")
+        log.info(f"---------------Training on fold {i + 1}------------------------")
         model = get_model(args)
         model.to(device)
-        model.train()
         pytorch_total_params = train_utils.count_parameters(model)
         log.info(f'The total parameters of model :{[pytorch_total_params]}')
 
         optimizer = Adam(model.parameters(), lr=args.lr)
-        scheduler = ReduceLROnPlateau(
-            optimizer, mode='min', factor=args.factor, patience=args.patience, min_lr=args.min_lr)
 
         # K-fold cross validation split
         n = len(dataset) // args.split
@@ -272,56 +282,46 @@ def main():
         val_dataset = train_dataset[val_mask]
         train_dataset = train_dataset[~val_mask]
 
-        val_loader = DataLoader(val_dataset, batch_size=args.batch_size)
-        test_loader = DataLoader(test_dataset, batch_size=args.batch_size)
-        test_exp_loader = DataLoader(test_exp_dataset, batch_size=args.batch_size)  # These are the new test splits
-        test_lrn_loader = DataLoader(test_lrn_dataset, batch_size=args.batch_size)
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+        val_loader = loader(val_dataset, batch_size=args.batch_size, num_workers=args.num_workers)
+        test_loader = loader(test_dataset, batch_size=args.batch_size, num_workers=args.num_workers)
+        test_exp_loader = loader(test_exp_dataset, batch_size=args.batch_size, num_workers=args.num_workers)
+        test_lrn_loader = loader(test_lrn_dataset, batch_size=args.batch_size, num_workers=args.num_workers)
+        train_loader = loader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
         best_val_loss, best_test_acc, best_train_acc = 100, 0, 0
+        start_outer = time.time()
         for epoch in range(args.num_epochs):
-            log.info(f'Starting epoch {epoch + 1}...')
-            with torch.enable_grad(), tqdm(total=len(train_loader.dataset)) as progress_bar:
-                for graphs in train_loader:
-                    graphs = graphs.to(device)
-                    batch_size = graphs.num_graphs
-                    optimizer.zero_grad()
-                    predict = model(graphs)
-                    predict = F.log_softmax(predict, dim=-1)
-                    loss = F.nll_loss(predict, graphs.y)
-                    loss.backward()
-                    nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                    optimizer.step()
-                    model.zero_grad()
-                    # Log info
-                    progress_bar.update(batch_size)
-                    loss_val = loss.item()
-                    lr = optimizer.param_groups[0]['lr']
-                    progress_bar.set_postfix(epoch=epoch + 1,
-                                             loss=loss_val,
-                                             lr=lr)
+            start = time.time()
+            train_loss = train(train_loader, model, optimizer, device, parallel=args.parallel)
+            lr = optimizer.param_groups[0]['lr']
+            val_loss = val(val_loader, model, device, parallel=args.parallel)
+            train_acc = test(train_loader, model, device, parallel=args.parallel)
+            test_acc = test(test_loader, model, device, parallel=args.parallel)
+            if best_val_loss >= val_loss:
+                best_val_loss = val_loss
+                best_train_acc = train_acc
+                best_test_acc = test_acc
 
-                log.info(f"evaluate after epoch {epoch + 1}...")
-                train_loss = val(train_loader, model, device)
-                val_loss = val(val_loader, model, device)
-                scheduler.step(val_loss)
-                train_acc = test(train_loader, model, device)
-                test_acc = test(test_loader, model, device)
-                if best_val_loss >= val_loss:
-                    best_val_loss = val_loss
-                    best_train_acc = train_acc
-                    best_test_acc = test_acc
+            test_exp_acc = test(test_exp_loader, model, device, parallel=args.parallel)
+            test_lrn_acc = test(test_lrn_loader, model, device, parallel=args.parallel)
+            tr_accuracies[epoch, i] = train_acc
+            tst_accuracies[epoch, i] = test_acc
+            tst_exp_accuracies[epoch, i] = test_exp_acc
+            tst_lrn_accuracies[epoch, i] = test_lrn_acc
 
-                test_exp_acc = test(test_exp_loader, model, device)
-                test_lrn_acc = test(test_lrn_loader, model, device)
-                tr_accuracies[epoch, i] = train_acc
-                tst_accuracies[epoch, i] = test_acc
-                tst_exp_accuracies[epoch, i] = test_exp_acc
-                tst_lrn_accuracies[epoch, i] = test_lrn_acc
-                log.info('Epoch: {:03d}, LR: {:7f}, Train Loss: {:.7f}, '
-                         'Val Loss: {:.7f}, Test Acc: {:.7f}, Exp Acc: {:.7f}, Lrn Acc: {:.7f}, Train Acc: {:.7f}'.format(
-                    epoch + 1, lr, train_loss, val_loss, test_acc, test_exp_acc, test_lrn_acc, train_acc))
+            time_per_epoch = time.time() - start
+
+            log.info('Epoch: {:03d}, LR: {:7f}, Train Loss: {:.7f}, '
+                     'Val Loss: {:.7f}, Test Acc: {:.7f}, Exp Acc: {:.7f}, Lrn Acc: {:.7f}, Train Acc: {:.7f}, '
+                     'Seconds: {:.4f}'.format(
+                epoch + 1, lr, train_loss, val_loss, test_acc, test_exp_acc, test_lrn_acc, train_acc, time_per_epoch))
+
+            torch.cuda.empty_cache()  # empty test part memory cost
+
         acc.append(best_test_acc)
         tr_acc.append(best_train_acc)
+        time_average_epoch = time.time() - start_outer
+        log.info(
+            f'Fold {i+1}, best train: {best_train_acc}, best test: {best_test_acc}, Seconds/epoch: {time_average_epoch / (epoch+1)}')
     acc = torch.tensor(acc)
     tr_acc = torch.tensor(tr_acc)
     log.info("-------------------Print final result-------------------------")

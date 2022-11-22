@@ -6,6 +6,7 @@ import argparse
 import os
 import random
 import shutil
+import time
 from json import dumps
 
 import numpy as np
@@ -14,11 +15,12 @@ import torch.nn.functional as F
 import torch_geometric.transforms as T
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import DataLoader
+from torch_geometric.loader import DataListLoader, DataLoader
+from torch_geometric.nn import DataParallel
 from tqdm import tqdm
 
 import train_utils
-from data_utils import extract_multi_hop_neighbors, PyG_collate, resistance_distance, post_transform
+from data_utils import extract_multi_hop_neighbors, resistance_distance, post_transform
 from datasets.QM9Dataset import QM9, conversion
 from layers.input_encoder import QM9InputEncoder
 from layers.layer_utils import make_gnn_layer
@@ -51,13 +53,13 @@ def get_model(args):
                             pooling_method=args.pooling_method)
 
     model.reset_parameters()
-    # if args.parallel:
-    #    model = DataParallel(model, args.gpu_ids)
+    if args.parallel:
+        model = DataParallel(model, args.gpu_ids)
 
     return model
 
 
-class MyTransform(object):
+class TargetTransform(object):
     def __init__(self, target, pre_convert=False):
         self.target = target
         self.pre_convert = pre_convert
@@ -74,40 +76,41 @@ class MyFilter(object):
         return data.num_nodes > 6  # Remove graphs with less than 6 nodes.
 
 
-def convert_edge_labels(data):
+def edge_feature_transform(data):
     if data.edge_attr is not None:
         data.edge_attr = torch.where(data.edge_attr == 1)[1] + 2
     return data
 
 
-def train(model, train_loader, optimizer, device):
+def train(loader, model, optimizer, device, parallel=False):
     model.train()
     loss_all = 0
-
-    for data in train_loader:
-        data = data.to(device)
-        num_graphs = data.num_graphs
+    for data in loader:
         optimizer.zero_grad()
-        y = data.y
-
+        if parallel:
+            num_graphs = len(data)
+            y = torch.cat([d.y for d in data]).to(device)
+        else:
+            num_graphs = data.num_graphs
+            data = data.to(device)
+            y = data.y
         loss = F.mse_loss(model(data), y)
-
         loss.backward()
         loss_all += loss * num_graphs
         optimizer.step()
-    return loss_all / len(train_loader.dataset)
+    return loss_all / len(loader.dataset)
 
 
 @torch.no_grad()
-def test(model, loader, task, std, device):
+def test(loader, model, task, std, device, parallel=False):
     model.eval()
     error = 0
     for data in loader:
-        if type(data) == dict:
-            data = {key: data_.to(device) for key, data_ in data.items()}
+        if parallel:
+            y = torch.cat([d.y for d in data]).to(device)
         else:
             data = data.to(device)
-        y = data.y
+            y = data.y
         error += ((model(data) * std[task].cuda()) -
                   (y * std[task].cuda())).abs().sum().item()  # MAE
     return error / len(loader.dataset)
@@ -123,6 +126,8 @@ def main():
                         help='Probability of zeroing an activation in dropout layers.')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size per GPU. Scales automatically when \
                             multiple GPUs are available.')
+    parser.add_argument("--parallel", action="store_true",
+                        help="If true, use DataParallel for multi-gpu training")
     parser.add_argument('--num_workers', type=int, default=0, help='number of worker.')
     parser.add_argument('--load_path', type=str, default=None, help='Path to load as a model checkpoint.')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate.')
@@ -131,7 +136,6 @@ def main():
     parser.add_argument("--kernel", type=str, default="spd", choices=("gd", "spd"),
                         help="the kernel used for K-hop computation")
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs.')
-    parser.add_argument('--max_grad_norm', type=float, default=5.0, help='Maximum gradient norm for gradient clipping.')
     parser.add_argument("--hidden_size", type=int, default=128, help="hidden size of the model")
     parser.add_argument("--model_name", type=str, default="KPGINPlus", choices=("KPGIN", "KPGINPlus"),
                         help="Base GNN model")
@@ -196,11 +200,16 @@ def main():
     args.save_dir = train_utils.get_save_dir(args.save_dir, args.name, type=args.dataset_name)
     log = train_utils.get_logger(args.save_dir, args.name)
     device, args.gpu_ids = train_utils.get_available_devices()
-    if len(args.gpu_ids) > 1:
+    if len(args.gpu_ids) > 1 and args.parallel:
+        log.info(f'Using multi-gpu training')
         args.parallel = True
+        loader = DataListLoader
+        args.batch_size *= max(1, len(args.gpu_ids))
     else:
+        log.info(f'Using single-gpu training')
         args.parallel = False
-    args.batch_size *= max(1, len(args.gpu_ids))
+        loader = DataLoader
+
     # Set random seed
     log.info(f'Using random seed {args.seed}...')
     random.seed(args.seed)
@@ -208,7 +217,7 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    def pre_transform(g):
+    def multihop_transform(g):
         return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
                                            args.max_edge_count,
                                            args.max_distance_count, args.kernel)
@@ -231,8 +240,8 @@ def main():
         pre_filter = MyFilter()
         path += '_filtered'
 
-    dataset = QM9(path, pre_transform=T.Compose([convert_edge_labels, pre_transform, rd_feature]),
-                  transform=T.Compose([MyTransform(args.task, args.convert == 'pre'), transform]),
+    dataset = QM9(path, pre_transform=T.Compose([edge_feature_transform, multihop_transform, rd_feature]),
+                  transform=T.Compose([TargetTransform(args.task, args.convert == 'pre'), transform]),
                   pre_filter=pre_filter)
     dataset = dataset.shuffle()
 
@@ -255,9 +264,9 @@ def main():
     val_dataset = dataset[tenpercent:2 * tenpercent]
     train_dataset = dataset[2 * tenpercent:]
 
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=PyG_collate)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, collate_fn=PyG_collate)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=PyG_collate)
+    test_loader = loader(test_dataset, batch_size=args.batch_size, num_workers=args.num_workers)
+    val_loader = loader(val_dataset, batch_size=args.batch_size, num_workers=args.num_workers)
+    train_loader = loader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
 
     input_size = 19
     if args.use_pos:
@@ -279,35 +288,41 @@ def main():
 
     best_val_error = 1E6
     test_error = 1E6
+    start_outer = time.time()
     pbar = tqdm(range(1, args.num_epochs + 1))
     for epoch in pbar:
+        start = time.time()
         pbar.set_description('Epoch: {:03d}'.format(epoch))
         lr = scheduler.optimizer.param_groups[0]['lr']
-        loss = train(model, train_loader, optimizer, device)
-        val_error = test(model, val_loader, args.task, std, device)
+        loss = train(train_loader, model, optimizer, device, parallel=args.parallel)
+        val_error = test(val_loader, model, args.task, std, device, parallel=args.parallel)
         scheduler.step(val_error)
 
         if val_error <= best_val_error:
-            test_error = test(model, test_loader, args.task, std, device)
+            test_error = test(test_loader, model, args.task, std, device, parallel=args.parallel)
             best_val_error = val_error
             torch.save(model.state_dict(),
                        os.path.join(args.save_dir, f'best_model.pth'))
 
+        time_per_epoch = time.time() - start
         info = (
                 'Epoch: {:03d}, LR: {:7f}, Loss: {:.7f}, Validation MAE: {:.7f}, ' +
-                'Test MAE: {:.7f}, Test MAE norm: {:.7f}, Test MAE convert: {:.7f}'
+                'Test MAE: {:.7f}, Test MAE norm: {:.7f}, Test MAE convert: {:.7f}, Seconds: {:.4f}'
         ).format(
             epoch, lr, loss, val_error,
             test_error,
             test_error / std[args.task].cuda(),
-            test_error / conversion[int(args.task)].cuda() if args.convert == 'post' else 0
+            test_error / conversion[int(args.task)].cuda() if args.convert == 'post' else 0,
+            time_per_epoch
         )
-
         log.info(info)
-
         if optimizer.param_groups[0]['lr'] < args.min_lr:
             log.info("\n!! LR EQUAL TO MIN LR SET.")
             break
+        torch.cuda.empty_cache()  # empty test part memory cost
+    time_average_epoch = time.time() - start_outer
+    log.info(
+        f'Vali: {best_val_error}, Test: {best_val_error}, Seconds/epoch: {time_average_epoch / epoch}')
 
 
 if __name__ == "__main__":

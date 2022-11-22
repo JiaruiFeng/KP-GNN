@@ -7,14 +7,13 @@ import pickle
 import shutil
 
 import torch
-from tqdm import tqdm
-
 from torch_geometric.data import (
     Data,
     InMemoryDataset,
     download_url,
     extract_zip,
 )
+from tqdm import tqdm
 
 
 class ZINC(InMemoryDataset):

@@ -15,14 +15,15 @@ class FeatureSumEncoder(torch.nn.Module):
         hidden_size: hidden dimension of embedding
 
     """
-    def __init__(self, feature_dims,hidden_size,padding=False):
+
+    def __init__(self, feature_dims, hidden_size, padding=False):
         super(FeatureSumEncoder, self).__init__()
 
         self.embedding_list = torch.nn.ModuleList()
 
         for i, dim in enumerate(feature_dims):
             if padding:
-                emb = torch.nn.Embedding(dim, hidden_size,padding_idx=0)
+                emb = torch.nn.Embedding(dim, hidden_size, padding_idx=0)
             else:
                 emb = torch.nn.Embedding(dim, hidden_size)
             self.embedding_list.append(emb)
@@ -45,30 +46,30 @@ class FeatureConcatEncoder(torch.nn.Module):
 
     """
 
-    def __init__(self, feature_dims, hidden_size,padding=False):
+    def __init__(self, feature_dims, hidden_size, padding=False):
         super(FeatureConcatEncoder, self).__init__()
 
         self.embedding_list = torch.nn.ModuleList()
 
         for i, dim in enumerate(feature_dims):
             if padding:
-                emb = torch.nn.Embedding(dim, hidden_size,padding_idx=0)
+                emb = torch.nn.Embedding(dim, hidden_size, padding_idx=0)
             else:
                 emb = torch.nn.Embedding(dim, hidden_size)
             self.embedding_list.append(emb)
-        self.proj=torch.nn.Linear(len(feature_dims)*hidden_size,hidden_size)
+        self.proj = torch.nn.Linear(len(feature_dims) * hidden_size, hidden_size)
+
     def reset_parameters(self):
         for emb in self.embedding_list:
             emb.reset_parameters()
         self.proj.reset_parameters()
 
     def forward(self, x):
-        x_embeddings =[]
+        x_embeddings = []
         for i in range(x.shape[-1]):
             x_embeddings.append(self.embedding_list[i](x[..., i]))
-        x_embeddings=torch.cat(x_embeddings,dim=-1)
+        x_embeddings = torch.cat(x_embeddings, dim=-1)
         return self.proj(x_embeddings)
-
 
 
 class BondEncoder(torch.nn.Module):
@@ -83,8 +84,8 @@ class BondEncoder(torch.nn.Module):
         self.bond_embedding_list = torch.nn.ModuleList()
 
         for i, dim in enumerate(full_bond_feature_dims):
-            #add 2 for padding idx and self-loop
-            emb = torch.nn.Embedding(dim+2, hidden_size,padding_idx=0)
+            # add 2 for padding idx and self-loop
+            emb = torch.nn.Embedding(dim + 2, hidden_size, padding_idx=0)
             torch.nn.init.xavier_uniform_(emb.weight.data)
             self.bond_embedding_list.append(emb)
 

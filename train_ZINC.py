@@ -17,7 +17,6 @@ import torch.utils.data as data
 import torch_geometric.transforms as T
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-
 import train_utils
 from data_utils import extract_multi_hop_neighbors, PyG_collate, resistance_distance, post_transform
 from datasets.ZINC_dataset import ZINC
@@ -26,65 +25,47 @@ from layers.layer_utils import make_gnn_layer
 from models.GraphRegression import GraphRegression
 from models.model_utils import make_GNN
 from train_utils import count_parameters
-
+from torch_geometric.loader import DataListLoader, DataLoader
+from torch_geometric.nn import DataParallel
 
 # os.environ["CUDA_LAUNCH_BLOCKING"]="1"
-def train(model, device, loader, optimizer, epoch):
+def train(loader, model, device, optimizer, parallel=False):
+    model.train()
     total_loss = 0
-    with torch.enable_grad(), \
-            tqdm(total=len(loader.dataset)) as progress_bar:
-        for data in loader:
-            y = data.y
-            y = y.to(device)
+    for data in loader:
+        optimizer.zero_grad()
+        optimizer.zero_grad()
+        if parallel:
+            num_graphs = len(data)
+            y = torch.cat([d.y for d in data]).to(device)
+        else:
+            num_graphs = data.num_graphs
             data = data.to(device)
-            batch_size = data.num_graphs
-            optimizer.zero_grad()
-            # forward
-            score = model(data)
-            loss = (score - y).abs().mean()
-            loss.backward()
-            # nn.utils.clip_grad_norm_(model.parameters(),5.0)
-            optimizer.step()
-            mae = loss.detach().item()
-            progress_bar.update(batch_size)
-            loss_val = loss.item()
-            lr = optimizer.param_groups[0]['lr']
-            progress_bar.set_postfix(epoch=epoch,
-                                     loss=loss_val,
-                                     mae=mae,
-                                     lr=lr)
-            total_loss += loss.item() * batch_size
+            y = data.y
+        score = model(data)
+        loss = (score - y).abs().mean()
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * num_graphs
+
     return total_loss / len(loader.dataset)
 
 
-def test(model, device, loader):
-    total_mae = 0
+@torch.no_grad()
+def test(loader, model, device, parallel=False):
     model.eval()
-    N = 0
-    with torch.no_grad(), \
-            tqdm(total=len(loader.dataset)) as progress_bar:
+    total_mae = 0
+    for data in loader:
         for data in loader:
-            y = data.y
-            y = y.to(device)
-            data = data.to(device)
-            batch_size = data.num_graphs
-            # forward
-            score = model(data)
-            total_mae += (score - y).abs().sum().item()
-            N += batch_size
-            mae = total_mae / N
-            progress_bar.update(batch_size)
-            progress_bar.set_postfix(MAE=mae)
+            if parallel:
+                y = torch.cat([d.y for d in data]).to(device)
+            else:
+                data = data.to(device)
+                y = data.y
+        score = model(data)
+        total_mae += (score - y).abs().sum().item()
 
-    mae = total_mae / N
-
-    model.train()
-    results_list = [
-        ('Loss', mae),
-        ('MAE', mae)
-    ]
-    results = OrderedDict(results_list)
-    return results
+    return total_mae / len(loader.dataset)
 
 
 def get_model(args):
@@ -112,22 +93,16 @@ def get_model(args):
                             pooling_method=args.pooling_method)
     model.reset_parameters()
     # If use multiple gpu, torch geometric model must use DataParallel class
-    # if args.parallel:
-    #    model = DataParallel(model, args.gpu_ids)
+    if args.parallel:
+       model = DataParallel(model, args.gpu_ids)
 
     return model
 
 
-def convert_edge_labels(data):
+def edge_feature_transform(data):
     if data.edge_attr is not None:
         data.edge_attr = data.edge_attr + 1
     return data
-
-
-def MAE(scores, targets):
-    MAE = F.l1_loss(scores, targets)
-    MAE = MAE.detach().item()
-    return MAE
 
 
 def main():
@@ -139,6 +114,8 @@ def main():
                         help='Probability of zeroing an activation in dropout layers.')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size per GPU. Scales automatically when \
                             multiple GPUs are available.')
+    parser.add_argument("--parallel", action="store_true",
+                        help="If true, use DataParallel for multi-gpu training")
     parser.add_argument('--num_workers', type=int, default=0, help='number of worker.')
     parser.add_argument('--load_path', type=str, default=None, help='Path to load as a model checkpoint.')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate.')
@@ -147,7 +124,6 @@ def main():
     parser.add_argument("--kernel", type=str, default="spd", choices=("gd", "spd"),
                         help="the kernel used for K-hop computation")
     parser.add_argument('--num_epochs', type=int, default=500, help='Number of epochs.')
-    parser.add_argument('--max_grad_norm', type=float, default=5.0, help='Maximum gradient norm for gradient clipping.')
     parser.add_argument("--hidden_size", type=int, default=104, help="hidden size of the model")
     parser.add_argument("--model_name", type=str, default="KPGINPlus", choices=("KPGIN", "KPGINPlus"),
                         help="Base GNN model")
@@ -208,11 +184,16 @@ def main():
     args.save_dir = train_utils.get_save_dir(args.save_dir, args.name, type=args.dataset_name)
     log = train_utils.get_logger(args.save_dir, args.name)
     device, args.gpu_ids = train_utils.get_available_devices()
-    if len(args.gpu_ids) > 1:
+    if len(args.gpu_ids) > 1 and args.parallel:
+        log.info(f'Using multi-gpu training')
         args.parallel = True
+        loader = DataListLoader
+        args.batch_size *= max(1, len(args.gpu_ids))
     else:
+        log.info(f'Using single-gpu training')
         args.parallel = False
-    args.batch_size *= max(1, len(args.gpu_ids))
+        loader = DataLoader
+
     # Set random seed
     log.info(f'Using random seed {args.seed}...')
     random.seed(args.seed)
@@ -220,7 +201,7 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    def pre_transform(g):
+    def multihop_transform(g):
         return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
                                            args.max_edge_count,
                                            args.max_distance_count, args.kernel)
@@ -239,13 +220,13 @@ def main():
         shutil.rmtree(path)
 
     trainset = ZINC(path, subset=True, split="train",
-                    pre_transform=T.Compose([convert_edge_labels, rd_feature, pre_transform]),
+                    pre_transform=T.Compose([edge_feature_transform, multihop_transform, rd_feature]),
                     transform=transform)
     valset = ZINC(path, subset=True, split="val",
-                  pre_transform=T.Compose([convert_edge_labels, rd_feature, pre_transform]),
+                  pre_transform=T.Compose([edge_feature_transform, multihop_transform, rd_feature]),
                   transform=transform)
     testset = ZINC(path, subset=True, split="test",
-                   pre_transform=T.Compose([convert_edge_labels, rd_feature, pre_transform]),
+                   pre_transform=T.Compose([edge_feature_transform, multihop_transform, rd_feature]),
                    transform=transform)
 
     args.input_size = 21
@@ -253,21 +234,9 @@ def main():
     # output argument to log file
     log.info(f'Args: {dumps(vars(args), indent=4, sort_keys=True)}')
 
-    train_loader = data.DataLoader(trainset,
-                                   batch_size=args.batch_size,
-                                   shuffle=True,
-                                   num_workers=0,
-                                   collate_fn=PyG_collate)
-
-    val_loader = data.DataLoader(valset,
-                                 batch_size=args.batch_size,
-                                 shuffle=False,
-                                 collate_fn=PyG_collate)
-
-    test_loader = data.DataLoader(testset,
-                                  batch_size=args.batch_size,
-                                  shuffle=False,
-                                  collate_fn=PyG_collate)
+    train_loader = loader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    val_loader = loader(valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+    test_loader = loader(testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     test_perfs = []
     vali_perfs = []
@@ -292,40 +261,32 @@ def main():
         best_valid_perf = 1E6
         best_test_perf = None
         epoch = 0
+        start_outer = time()
         try:
             while epoch != args.num_epochs:
                 epoch += 1
-                log.info(f'Starting epoch {epoch}...')
                 start = time()
-                loss = train(model, device, train_loader, optimizer, epoch)
+                loss = train(train_loader, model, device, optimizer, parallel=args.parallel)
                 time_per_epoch = time() - start
-                log.info(f'Evaluating after epoch {epoch}...')
-                valid_perf = test(model, device, val_loader)["MAE"]
+                valid_perf = test(val_loader, model, device, parallel=args.parallel)
+                lr = optimizer.param_groups[0]['lr']
                 scheduler.step(valid_perf)
-
                 if valid_perf < best_valid_perf:
                     best_valid_perf = valid_perf
-                    best_test_perf = test(model, device, test_loader)["MAE"]
-                    torch.save(model.state_dict(),
-                               os.path.join(args.save_dir, f'best_model.pth'))
+                    best_test_perf = test(test_loader, model, device, parallel=args.parallel)
 
-                results = {'Epoch': epoch, 'Loss': loss, 'Cur Val': valid_perf,
-                           'Best Val': best_valid_perf, 'Best Test': best_test_perf, "Time per epoch": time_per_epoch}
-                results_str = ', '.join(f'{k}: {v:05.5f}' for k, v in results.items())
-                log.info(f"Run: {run}, {results_str}")
-
+                log.info(f'Epoch: {epoch:03d}, Train Loss: {loss:.4f}, '
+                         f'Cur Val: {valid_perf:.4f}, Best Val:{best_valid_perf:.4f}, Best Test: {best_test_perf:.4f}, lr:{lr:.7f}, Seconds: {time_per_epoch:.4f}')
                 if optimizer.param_groups[0]['lr'] < args.min_lr:
                     print("\n!! LR EQUAL TO MIN LR SET.")
                     break
-
+                torch.cuda.empty_cache()  # empty test part memory cost
 
         except KeyboardInterrupt:
             print('-' * 89)
             print('Exiting from training early because of KeyboardInterrupt')
-        results = {
-            'Best Val': best_valid_perf, 'Best Test': best_test_perf}
-        results_str = ', '.join(f'{k}: {v:05.5f}' for k, v in results.items())
-        log.info(f"Run: {run}, {results_str}")
+        time_average_epoch = time() - start_outer
+        log.info(f'Run: {run},  Best Val:{best_valid_perf:.4f}, Best Test: {best_test_perf:.4f},Seconds/epoch: : {time_average_epoch / epoch}')
         test_perfs.append(best_test_perf)
         vali_perfs.append(best_valid_perf)
 

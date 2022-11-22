@@ -1,21 +1,26 @@
 """
 Graph and node property dataset
 """
-import os, torch, numpy as np
+import numpy as np
+import os
 import pickle
+import torch
 from inspect import signature
-from . import graph_algorithms
-from .graph_generation import GraphType, generate_graph
+
 from torch_geometric.data import InMemoryDataset
 from torch_geometric.data.data import Data
 from torch_geometric.utils import dense_to_sparse
 
+from . import graph_algorithms
+from .graph_generation import GraphType, generate_graph
+
+
 class GraphPropertyDataset(InMemoryDataset):
     # parameters for generating the dataset
-    seed=1234
-    graph_type='RANDOM'
-    extrapolation=False
-    nodes_labels=["eccentricity", "graph_laplacian_features", "sssp"]
+    seed = 1234
+    graph_type = 'RANDOM'
+    extrapolation = False
+    nodes_labels = ["eccentricity", "graph_laplacian_features", "sssp"]
     graph_labels = ["is_connected", "diameter", "spectral_radius"]
 
     def __init__(self, root, split, transform=None, pre_transform=None, pre_filter=None):
@@ -64,11 +69,11 @@ class GraphPropertyDataset(InMemoryDataset):
 
 def to_torch_geom(adj, features, node_labels, graph_labels):
     graphs = {}
-    for key in adj.keys():      # train, val, test
+    for key in adj.keys():  # train, val, test
         graphs[key] = []
-        for i in range(len(adj[key])):          # Graph of a given size
+        for i in range(len(adj[key])):  # Graph of a given size
             batch_i = []
-            for j in range(adj[key][i].shape[0]):       # Number of graphs
+            for j in range(adj[key][i].shape[0]):  # Number of graphs
                 graph_adj = adj[key][i][j]
                 graph = Data(x=features[key][i][j],
                              edge_index=dense_to_sparse(graph_adj)[0],
@@ -212,6 +217,7 @@ class GenerateGraphPropertyDataset:
 
         with open(filename, 'wb') as f:
             pickle.dump((self.adj, self.features, self.nodes_labels, self.graph_labels), f)
+
 
 if __name__ == '__main__':
     dataset = GraphPropertyDataset(root='data/pna-simulation', split='train')

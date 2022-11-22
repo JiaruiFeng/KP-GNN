@@ -367,66 +367,6 @@ def num_graphs(data):
         return data.x.size(0)
 
 
-def train_TU(model, optimizer, loader, device):
-    """Training for one epoch on TU dataset
-    Args:
-        model(nn.Module): GNN model
-        optimizer(nn.optimizer): model optimizer
-        loader(torch.data.DataLoader): data loader
-        device(str): training device
-
-    """
-    model.train()
-    total_loss = 0
-    for data in loader:
-        optimizer.zero_grad()
-        data = data.to(device)
-        out = model(data)
-        out = F.log_softmax(out, dim=-1)
-        loss = F.nll_loss(out, data.y.view(-1))
-        loss.backward()
-        total_loss += loss.item() * num_graphs(data)
-        optimizer.step()
-    return total_loss / len(loader.dataset)
-
-
-def val_TU(model, loader, device):
-    """validation of model using val set on TU dataset
-    Args:
-        model(nn.Module): GNN model
-        loader(torch.data.DataLoader): data loader
-        device(str): training device
-
-    """
-    model.eval()
-    loss = 0
-    for data in loader:
-        data = data.to(device)
-        with torch.no_grad():
-            out = model(data)
-            out = F.log_softmax(out, dim=-1)
-        loss += F.nll_loss(out, data.y.view(-1), reduction='sum').item()
-    return loss / len(loader.dataset)
-
-
-def test_TU(model, loader, device):
-    """test of model using test set on TU dataset
-    Args:
-        model(nn.Module): GNN model
-        loader(torch.data.DataLoader): data loader
-        device(str): training device
-
-    """
-    model.eval()
-    correct = 0
-    for data in loader:
-        data = data.to(device)
-        with torch.no_grad():
-            pred = model(data).max(1)[1]
-        correct += pred.eq(data.y.view(-1)).sum().item()
-    return correct / len(loader.dataset)
-
-
 def count_parameters(model):
     """return the total number of parameter in the model
     Args:

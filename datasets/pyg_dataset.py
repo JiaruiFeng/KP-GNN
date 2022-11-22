@@ -1,16 +1,18 @@
 """
 OGB datasets
 """
-from torch_geometric.data import InMemoryDataset
-import pandas as pd
-import shutil, os
+import os
 import os.path as osp
-import torch
+import shutil
+from itertools import repeat
+
 import numpy as np
 import ogb
-from ogb.utils.url import decide_download, download_url, extract_zip
+import pandas as pd
+import torch
 from ogb.io.read_graph_pyg import read_graph_pyg
-from itertools import repeat
+from ogb.utils.url import decide_download, download_url, extract_zip
+from torch_geometric.data import InMemoryDataset
 from tqdm import tqdm
 
 
@@ -59,7 +61,7 @@ class PygGraphPropPredDataset(InMemoryDataset):
         # If so, check whether the dataset version is the newest or not.
         # If the dataset is not the newest version, notify this to the user.
         if osp.isdir(self.root) and (
-        not osp.exists(osp.join(self.root, 'RELEASE_v' + str(self.meta_info['version']) + '.txt'))):
+                not osp.exists(osp.join(self.root, 'RELEASE_v' + str(self.meta_info['version']) + '.txt'))):
             print(self.name + ' has been updated.')
             if input('Will you update the dataset now? (y/N)\n').lower() == 'y':
                 shutil.rmtree(self.root)
@@ -213,7 +215,7 @@ class PygGraphPropPredDataset(InMemoryDataset):
             data.num_nodes = self.data.__num_nodes__[idx]
 
         for key in self.data.keys:
-            if key=="num_nodes":
+            if key == "num_nodes":
                 continue
             item, slices = self.data[key], self.slices[key]
             if torch.is_tensor(item):
@@ -228,7 +230,7 @@ class PygGraphPropPredDataset(InMemoryDataset):
 
 
 if __name__ == '__main__':
-    pyg_dataset = PygGraphPropPredDataset(name='ogbg-molhiv',root="data")
+    pyg_dataset = PygGraphPropPredDataset(name='ogbg-molhiv', root="data")
     print(pyg_dataset.num_classes)
     split_index = pyg_dataset.get_idx_split()
     print(pyg_dataset)

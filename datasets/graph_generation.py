@@ -1,12 +1,12 @@
 """
 Utils for generating random graph
 """
-import numpy as np
-import random
-import networkx as nx
 import math
-import matplotlib.pyplot as plt  # only required to plot
+import random
 from enum import Enum
+
+import networkx as nx
+import numpy as np
 
 """
     Generates random graphs of different types of a given size.

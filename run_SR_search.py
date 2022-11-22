@@ -8,3 +8,4 @@ for parameter in grid:
     kernel, k = parameter
     script = f"python train_SR.py --K={k} --num_layer=2 --kernel={kernel}"
     os.system(script)
+

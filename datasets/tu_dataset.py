@@ -5,13 +5,14 @@ TU dataset. Adapted from NestedGNN: https://github.com/muhanzhang/NestedGNN
 import os
 import os.path as osp
 import shutil
+
+import networkx as nx
+import numpy as np
+import torch
+from torch_geometric.data import InMemoryDataset, download_url, extract_zip, Data
+from torch_geometric.io import read_tu_data
 from tqdm import tqdm
 
-import torch
-from torch_geometric.data import InMemoryDataset, download_url, extract_zip,Data
-from torch_geometric.io import read_tu_data
-import numpy as np
-import networkx as nx
 
 class TUDataset(InMemoryDataset):
     r"""A variety of graph kernel benchmark datasets, *.e.g.* "IMDB-BINARY",
@@ -69,10 +70,8 @@ class TUDataset(InMemoryDataset):
         self.cleaned = cleaned
         super(TUDataset, self).__init__(root, transform, pre_transform,
                                         pre_filter)
-        #we transform the edge and node feature to index and not consider the attributes
+        # we transform the edge and node feature to index and not consider the attributes
         self.data, self.slices = torch.load(self.processed_paths[0])
-
-
 
     @property
     def raw_dir(self):
@@ -88,7 +87,7 @@ class TUDataset(InMemoryDataset):
     def num_node_labels(self):
         if self.data.x is None:
             return 0
-        return torch.max(self.data.x).int().item()+1
+        return torch.max(self.data.x).int().item() + 1
 
     @property
     def num_node_attributes(self):
@@ -132,7 +131,7 @@ class TUDataset(InMemoryDataset):
 
         if self.pre_transform is not None:
             data_list = [self.get(idx) for idx in range(len(self))]
-            #data_list = [self.pre_transform(data) for data in data_list]
+            # data_list = [self.pre_transform(data) for data in data_list]
             new_data_list = []
             for data in tqdm(data_list):
                 new_data_list.append(self.pre_transform(data))
@@ -230,14 +229,14 @@ class S2VGraph(object):
 
         self.max_neighbor = 0
 
+
 def read_gin_tudataset(root, dataset, degree_as_tag=False):
     print('loading data')
     g_list = []
     label_dict = {}
     feat_dict = {}
 
-
-    with open(f'{root}/{dataset}.txt' , 'r') as f:
+    with open(f'{root}/{dataset}.txt', 'r') as f:
         n_g = int(f.readline().strip())
         for i in range(n_g):
             row = f.readline().strip().split()
@@ -282,7 +281,7 @@ def read_gin_tudataset(root, dataset, degree_as_tag=False):
 
             g_list.append(S2VGraph(g, l, node_tags))
 
-    #add labels and edge_mat
+    # add labels and edge_mat
     for g in g_list:
         g.neighbors = [[] for i in range(len(g.g))]
         for i, j in g.g.edges():
@@ -300,24 +299,23 @@ def read_gin_tudataset(root, dataset, degree_as_tag=False):
         edges.extend([[i, j] for j, i in edges])
 
         deg_list = list(dict(g.g.degree(range(len(g.g)))).values())
-        g.edge_mat = torch.LongTensor(edges).transpose(0,1)
+        g.edge_mat = torch.LongTensor(edges).transpose(0, 1)
 
     if degree_as_tag:
         for g in g_list:
             g.node_tags = list(dict(g.g.degree).values())
 
-    #Extracting unique tag labels
+    # Extracting unique tag labels
     tagset = set([])
     for g in g_list:
         tagset = tagset.union(set(g.node_tags))
 
     tagset = list(tagset)
-    tag2index = {tagset[i]:i for i in range(len(tagset))}
+    tag2index = {tagset[i]: i for i in range(len(tagset))}
 
     for g in g_list:
         g.node_features = torch.zeros(len(g.node_tags), len(tagset))
         g.node_features[range(len(g.node_tags)), [tag2index[tag] for tag in g.node_tags]] = 1
-
 
     print('# classes: %d' % len(label_dict))
     print('# maximum node tag: %d' % len(tagset))

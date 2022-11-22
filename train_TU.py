@@ -8,14 +8,14 @@ import shutil
 import time
 from itertools import product
 from json import dumps
-
+import torch.nn.functional as F
 import numpy as np
 import torch
 import torch.nn as nn
 import torch_geometric.transforms as T
 from torch.optim import Adam
-from torch.utils.data import DataLoader
-from torch_geometric.data import DenseDataLoader as DenseLoader
+from torch_geometric.loader import DataListLoader, DataLoader
+from torch_geometric.nn import DataParallel
 from tqdm import tqdm
 
 import train_utils
@@ -25,22 +25,57 @@ from layers.input_encoder import LinearEncoder
 from layers.layer_utils import make_gnn_layer
 from models.GraphClassification import GraphClassification
 from models.model_utils import make_GNN
-
-
 # os.environ["CUDA_LAUNCH_BLOCKING"]="1"
 
-def cross_validation_GIN_split(dataset, model, collate, epochs, batch_size, lr, factor, weight_decay, device, log=None):
+
+
+def train_TU(loader, model, optimizer, device, parallel=False):
+    model.train()
+    total_loss = 0
+    for data in loader:
+        optimizer.zero_grad()
+        if parallel:
+            num_graphs = len(data)
+            y = torch.cat([d.y for d in data]).to(device)
+        else:
+            num_graphs = data.num_graphs
+            data = data.to(device)
+            y = data.y
+        out = model(data)
+        out = F.log_softmax(out, dim=-1)
+        loss = F.nll_loss(out, y.view(-1))
+        loss.backward()
+        total_loss += loss.item() * num_graphs
+        optimizer.step()
+    return total_loss / len(loader.dataset)
+
+
+@torch.no_grad()
+def val_TU(loader, model, device, parallel=False):
+    model.eval()
+    loss = 0
+    correct = 0
+    for data in loader:
+        if parallel:
+            y = torch.cat([d.y for d in data]).to(device)
+        else:
+            data = data.to(device)
+            y = data.y
+        out = model(data)
+        pred = out.max(1)[1]
+        out = F.log_softmax(out, dim=-1)
+        loss += F.nll_loss(out, y.view(-1), reduction='sum').item()
+        correct += pred.eq(y.view(-1)).sum().item()
+    return loss / len(loader.dataset), correct / len(loader.dataset)
+
+
+def cross_validation_GIN_split(dataset, args, device, loader, log=None):
     """Cross validation framework with GIN split.
     Args:
         dataset(PyG.dataset): PyG dataset for training and testing
-        model(nn.Module): GNN model
-        collate(function): function for generate batch data
-        epochs(int): number of epochs in the training of each fold
-        batch_size: batch size of training
-        lr(float): learning rate
-        factor(float): reduce factor in learning rate scheduler
-        weight_decay(float): L2 weight decay regularization
+        args(Namesapce): arguments parser
         device(str): training device
+        loader (DataLOader): dataloader for model training
         log(logger): log file
     """
     folds = 10
@@ -54,25 +89,20 @@ def cross_validation_GIN_split(dataset, model, collate, epochs, batch_size, lr, 
         train_dataset = dataset[train_idx]
         test_dataset = dataset[test_idx]
 
-        if 'adj' in train_dataset[0]:
-            train_loader = DenseLoader(train_dataset, batch_size, shuffle=True, collate_fn=collate)
-            test_loader = DenseLoader(test_dataset, batch_size, shuffle=False, collate_fn=collate)
-        else:
-            train_loader = DataLoader(train_dataset, batch_size, shuffle=True, collate_fn=collate)
-            test_loader = DataLoader(test_dataset, batch_size, shuffle=False, collate_fn=collate)
+        train_loader = loader(train_dataset, args.batch_size, shuffle=True)
+        test_loader = loader(test_dataset, args.batch_size, shuffle=False)
 
+        model = get_model(args)
         model.to(device)
-        model.reset_parameters()
-        optimizer = Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-
+        optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.l2_wd)
         t_start = time.perf_counter()
 
-        pbar = tqdm(range(1, epochs + 1), ncols=70)
+        pbar = tqdm(range(1, args.num_epochs + 1), ncols=70)
         for epoch in pbar:
-            train_loss = train_utils.train_TU(model, optimizer, train_loader, device)
-            test_loss = train_utils.val_TU(model, test_loader, device)
+            train_loss = train_TU(train_loader, model, optimizer, device, parallel=args.parallel)
+            test_loss, test_acc = val_TU(test_loader, model, device, parallel=args.parallel)
             test_losses.append(test_loss)
-            accs.append(train_utils.test_TU(model, test_loader, device))
+            accs.append(test_acc)
             eval_info = {
                 'fold': fold + 1,
                 'epoch': epoch,
@@ -88,16 +118,13 @@ def cross_validation_GIN_split(dataset, model, collate, epochs, batch_size, lr, 
             # decay the learning rate
             if epoch % lr_decay_step_size == 0:
                 for param_group in optimizer.param_groups:
-                    param_group["lr"] = factor * param_group["lr"]
-
-        # if torch.cuda.is_available():
-        #    torch.cuda.synchronize()
+                    param_group["lr"] = args.factor * param_group["lr"]
 
         t_end = time.perf_counter()
         durations.append(t_end - t_start)
 
     loss, acc, duration = torch.tensor(test_losses), torch.tensor(accs), torch.tensor(durations)
-    loss, acc = loss.view(folds, epochs), acc.view(folds, epochs)
+    loss, acc = loss.view(folds, args.num_epochs), acc.view(folds, args.num_epochs)
     acc_max, _ = acc.max(1)
     acc_mean = acc.mean(0)
     acc_cross_epoch_max, argmax = acc_mean.max(dim=0)
@@ -121,23 +148,17 @@ def cross_validation_GIN_split(dataset, model, collate, epochs, batch_size, lr, 
            (acc_final.item(), acc[:, -1].std().item())
 
 
-def cross_validation_with_PyG_dataset(dataset, model, collate, folds, epochs, batch_size, lr, factor, weight_decay,
-                                      device, log=None, seed=234):
+def cross_validation_with_PyG_dataset(dataset, args, device, loader, log=None, seed=234):
     """Cross validation framework without validation dataset. Adapted from Nested GNN:https://github.com/muhanzhang/NestedGNN
     Args:
         dataset(PyG.dataset): PyG dataset for training and testing
-        model(nn.Module): GNN model
-        collate(function): function for generate batch data
-        folds(int): number of fold in cross validation
-        epochs(int): number of epochs in the training of each fold
-        batch_size: batch size of training
-        lr(float): learning rate
-        factor(float): reduce factor in learning rate scheduler
-        weight_decay(float): L2 weight decay regularization
+        args(Namesapce): arguments parser
         device(str): training device
+        loader (DataLOader): dataloader for model training
         log(logger): log file
         seed(int): random seed
     """
+    folds = 10
     lr_decay_step_size = 50
     test_losses, accs, durations = [], [], []
     count = 1
@@ -150,28 +171,20 @@ def cross_validation_with_PyG_dataset(dataset, model, collate, folds, epochs, ba
         train_dataset = dataset[train_idx]
         test_dataset = dataset[test_idx]
 
-        if 'adj' in train_dataset[0]:
-            train_loader = DenseLoader(train_dataset, batch_size, shuffle=True, collate_fn=collate)
-            test_loader = DenseLoader(test_dataset, batch_size, shuffle=False, collate_fn=collate)
-        else:
-            train_loader = DataLoader(train_dataset, batch_size, shuffle=True, collate_fn=collate)
-            test_loader = DataLoader(test_dataset, batch_size, shuffle=False, collate_fn=collate)
+        train_loader = loader(train_dataset, args.batch_size, shuffle=True)
+        test_loader = loader(test_dataset, args.batch_size, shuffle=False)
 
+        model = get_model(args)
         model.to(device)
-        model.reset_parameters()
-        optimizer = Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-
-        # if torch.cuda.is_available():
-        #   torch.cuda.synchronize()
-
+        optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.l2_wd)
         t_start = time.perf_counter()
 
-        pbar = tqdm(range(1, epochs + 1), ncols=70)
+        pbar = tqdm(range(1, args.num_epochs + 1), ncols=70)
         for epoch in pbar:
-            train_loss = train_utils.train_TU(model, optimizer, train_loader, device)
-            test_loss = train_utils.val_TU(model, test_loader, device)
+            train_loss = train_TU(train_loader, model, optimizer, device, parallel=args.parallel)
+            test_loss, test_acc = val_TU(test_loader, model, device, parallel=args.parallel)
             test_losses.append(test_loss)
-            accs.append(train_utils.test_TU(model, test_loader, device))
+            accs.append(test_acc)
             eval_info = {
                 'fold': fold + 1,
                 'epoch': epoch,
@@ -186,16 +199,14 @@ def cross_validation_with_PyG_dataset(dataset, model, collate, folds, epochs, ba
 
             if epoch % lr_decay_step_size == 0:
                 for param_group in optimizer.param_groups:
-                    param_group["lr"] = factor * param_group["lr"]
+                    param_group["lr"] = args.factor * param_group["lr"]
 
-        # if torch.cuda.is_available():
-        #   torch.cuda.synchronize()
 
         t_end = time.perf_counter()
         durations.append(t_end - t_start)
 
     loss, acc, duration = torch.tensor(test_losses), torch.tensor(accs), torch.tensor(durations)
-    loss, acc = loss.view(folds, epochs), acc.view(folds, epochs)
+    loss, acc = loss.view(folds, args.num_epochs), acc.view(folds, args.num_epochs)
     acc_max, _ = acc.max(1)
     acc_mean = acc.mean(0)
     acc_cross_epoch_max, argmax = acc_mean.max(dim=0)
@@ -246,13 +257,12 @@ def get_model(args):
 
     model.reset_parameters()
 
-    # If use multiple gpu, torch geometric model must use DataParallel class
-    # if args.parallel:
-    #    model = DataParallel(model, args.gpu_ids)
+    if args.parallel:
+        model = DataParallel(model, args.gpu_ids)
     return model
 
 
-def convert_edge_labels(data):
+def edge_feature_transform(data):
     if data.edge_attr is not None:
         data.edge_attr = torch.where(data.edge_attr == 1)[1] + 2
     return data
@@ -268,6 +278,8 @@ def main():
                         help='Probability of zeroing an activation in dropout layers.')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size per GPU. Scales automatically when \
                             multiple GPUs are available.')
+    parser.add_argument("--parallel", action="store_true",
+                        help="If true, use DataParallel for multi-gpu training")
     parser.add_argument('--num_workers', type=int, default=0, help='number of worker.')
     parser.add_argument('--load_path', type=str, default=None, help='Path to load as a model checkpoint.')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate.')
@@ -276,7 +288,7 @@ def main():
                         help="the kernel used for K-hop computation")
     parser.add_argument('--num_epochs', type=int, default=350, help='Number of epochs.')
     parser.add_argument("--hidden_size", type=int, default=32, help="hidden size of the model")
-    parser.add_argument("--model_name", type=str, default="KPGCN",
+    parser.add_argument("--model_name", type=str, default="KPGIN",
                         choices=("KPGCN", "KPGIN", "KPGraphSAGE", "KPGINPlus"), help="Model name")
     parser.add_argument("--K", type=int, default=2, help="number of hop to consider")
     parser.add_argument("--max_pe_num", type=int, default=30,
@@ -330,11 +342,16 @@ def main():
     args.save_dir = train_utils.get_save_dir(args.save_dir, args.name, type=args.dataset_name + "_GIN")
     log = train_utils.get_logger(args.save_dir, args.name)
     device, args.gpu_ids = train_utils.get_available_devices()
-    if len(args.gpu_ids) > 1:
+    if len(args.gpu_ids) > 1 and args.parallel:
+        log.info(f'Using multi-gpu training')
         args.parallel = True
+        loader = DataListLoader
+        args.batch_size *= max(1, len(args.gpu_ids))
     else:
+        log.info(f'Using single-gpu training')
         args.parallel = False
-    args.batch_size *= max(1, len(args.gpu_ids))
+        loader = DataLoader
+
     # Set random seed
     log.info(f'Using random seed {args.seed}...')
     random.seed(args.seed)
@@ -342,7 +359,7 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    def pre_transform(g):
+    def multihop_transform(g):
         return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
                                            args.max_edge_count,
                                            args.max_distance_count, args.kernel)
@@ -387,33 +404,23 @@ def main():
                     shutil.rmtree(path + "/" + args.dataset_name + '/processed')
                 if args.dataset_name == "DD":
                     dataset = TUDataset(path, args.dataset_name,
-                                        pre_transform=T.Compose([convert_edge_labels, pre_transform, rd_feature]),
+                                        pre_transform=T.Compose([edge_feature_transform, multihop_transform, rd_feature]),
                                         transform=transform,
                                         cleaned=False)
                 else:
                     dataset = TUDatasetGINSplit(args.dataset_name, path,
-                                                pre_transform=T.Compose(
-                                                    [convert_edge_labels, pre_transform, rd_feature]),
+                                                pre_transform=T.Compose([edge_feature_transform, multihop_transform, rd_feature]),
                                                 transform=transform)
 
                 args.input_size = dataset.num_node_features
                 args.output_size = dataset.num_classes
 
-                model = get_model(args)
                 if args.dataset_name == "DD":
                     graphsnn_setting_result, gin_setting_result, final_epoch_result = cross_validation_with_PyG_dataset(
-                        dataset, model, collate=PyG_collate, folds=10,
-                        epochs=args.num_epochs,
-                        batch_size=args.batch_size, lr=args.lr,
-                        factor=args.factor,
-                        weight_decay=args.l2_wd,
-                        device=device, log=log)
+                        dataset, args, device, loader, log=log)
                 else:
                     graphsnn_setting_result, gin_setting_result, final_epoch_result = cross_validation_GIN_split(
-                        dataset, model, collate=PyG_collate, epochs=args.num_epochs,
-                        batch_size=args.batch_size, lr=args.lr, factor=args.factor,
-                        weight_decay=args.l2_wd,
-                        device=device, log=log)
+                        dataset, args, device, loader, log=log)
 
                 if graphsnn_setting_result[0] > best_graphSNN_result[0] or \
                         (graphsnn_setting_result[0] == best_graphSNN_result[0] and graphsnn_setting_result[0] <
@@ -472,41 +479,24 @@ def main():
             shutil.rmtree(path + "/" + args.dataset_name + '/processed')
         if args.dataset_name == "DD":
             dataset = TUDataset(path, args.dataset_name,
-                                pre_transform=T.Compose([convert_edge_labels, pre_transform, rd_feature]),
+                                pre_transform=T.Compose([edge_feature_transform, multihop_transform, rd_feature]),
                                 transform=transform,
                                 cleaned=False)
 
         else:
             dataset = TUDatasetGINSplit(args.dataset_name, path,
-                                        pre_transform=T.Compose([convert_edge_labels, pre_transform, rd_feature]),
+                                        pre_transform=T.Compose([edge_feature_transform, multihop_transform, rd_feature]),
                                         transform=transform)
 
         args.input_size = dataset.num_node_features
         args.output_size = dataset.num_classes
 
-        model = get_model(args)
         if args.dataset_name == "DD":
-            graphsnn_setting_result, gin_setting_result, final_epoch_result = cross_validation_with_PyG_dataset(dataset,
-                                                                                                                model,
-                                                                                                                collate=PyG_collate,
-                                                                                                                folds=10,
-                                                                                                                epochs=args.num_epochs,
-                                                                                                                batch_size=args.batch_size,
-                                                                                                                lr=args.lr,
-                                                                                                                factor=args.factor,
-                                                                                                                weight_decay=args.l2_wd,
-                                                                                                                device=device,
-                                                                                                                log=log)
+            graphsnn_setting_result, gin_setting_result, final_epoch_result = \
+                cross_validation_with_PyG_dataset(dataset, args, device, loader, log=log)
         else:
-            graphsnn_setting_result, gin_setting_result, final_epoch_result = cross_validation_GIN_split(dataset, model,
-                                                                                                         collate=PyG_collate,
-                                                                                                         epochs=args.num_epochs,
-                                                                                                         batch_size=args.batch_size,
-                                                                                                         lr=args.lr,
-                                                                                                         factor=args.factor,
-                                                                                                         weight_decay=args.l2_wd,
-                                                                                                         device=device,
-                                                                                                         log=log)
+            graphsnn_setting_result, gin_setting_result, final_epoch_result = \
+                cross_validation_GIN_split(dataset, args, device, loader, log=log)
 
 
 if __name__ == "__main__":

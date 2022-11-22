@@ -12,39 +12,50 @@ import numpy as np
 import torch
 import torch_geometric.transforms as T
 from torch.optim import Adam
-from torch_geometric.data import DataLoader
+from torch_geometric.loader import DataListLoader, DataLoader
+from torch_geometric.nn import DataParallel
 from torch_geometric.datasets import GNNBenchmarkDataset
-
+import torch.nn.functional as F
 import train_utils
-from data_utils import extract_multi_hop_neighbors, PyG_collate, post_transform, resistance_distance
+from data_utils import extract_multi_hop_neighbors, post_transform, resistance_distance
 from layers.input_encoder import LinearEncoder
 from layers.layer_utils import make_gnn_layer
 from models.GraphClassification import GraphClassification
 from models.model_utils import make_GNN
 
 
-def train(train_loader, model, optimizer, device):
+def train(loader, model, optimizer, device, parallel=False):
     model.train()
     total_loss = 0
-    for data in train_loader:
-        data = data.to(device)
+    for data in loader:
         optimizer.zero_grad()
+        if parallel:
+            num_graphs = len(data)
+            y = torch.cat([d.y for d in data]).to(device)
+        else:
+            num_graphs = data.num_graphs
+            data = data.to(device)
+            y = data.y
         out = model(data).squeeze()
-        loss = torch.nn.CrossEntropyLoss()(out, data.y)
+        loss = F.cross_entropy(out, y)
         loss.backward()
-        total_loss += loss.item() * data.num_graphs
+        total_loss += loss.item() * num_graphs
         optimizer.step()
-    return total_loss / len(train_loader.dataset)
+    return total_loss / len(loader.dataset)
 
 
 @torch.no_grad()
-def test(loader, model, device):
-    model.train()  # eliminate the effect of BN
+def val(loader, model, device, parallel=False):
+    model.eval()
     y_preds, y_trues = [], []
     for data in loader:
-        data = data.to(device)
+        if parallel:
+            y = torch.cat([d.y for d in data]).to(device)
+        else:
+            data = data.to(device)
+            y = data.y
         y_preds.append(torch.argmax(model(data), dim=-1))
-        y_trues.append(data.y)
+        y_trues.append(y)
     y_preds = torch.cat(y_preds, -1)
     y_trues = torch.cat(y_trues, -1)
     return (y_preds == y_trues).float().mean()
@@ -76,13 +87,13 @@ def get_model(args):
                                 output_size=args.output_size)
 
     model.reset_parameters()
-    # if args.parallel:
-    #    model = DataParallel(model, args.gpu_ids)
+    if args.parallel:
+        model = DataParallel(model, args.gpu_ids)
 
     return model
 
 
-def add_ones(data):
+def node_feature_transform(data):
     if "x" not in data:
         data.x = torch.ones([data.num_nodes, 1], dtype=torch.float)
     return data
@@ -97,6 +108,8 @@ def main():
                         help='Probability of zeroing an activation in dropout layers.')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size per GPU. Scales automatically when \
                             multiple GPUs are available.')
+    parser.add_argument("--parallel", action="store_true",
+                        help="If true, use DataParallel for multi-gpu training")
     parser.add_argument('--num_workers', type=int, default=0, help='number of worker.')
     parser.add_argument('--load_path', type=str, default=None, help='Path to load as a model checkpoint.')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate.')
@@ -104,7 +117,6 @@ def main():
     parser.add_argument("--kernel", type=str, default="spd", choices=("gd", "spd"),
                         help="the kernel used for K-hop computation")
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs.')
-    parser.add_argument('--max_grad_norm', type=float, default=5.0, help='Maximum gradient norm for gradient clipping.')
     parser.add_argument("--hidden_size", type=int, default=48, help="hidden size of the model")
     parser.add_argument("--model_name", type=str, default="KPGIN",
                         choices=("KPGCN", "KPGIN", "KPGraphSAGE", "KPGINPlus"), help="Base GNN model")
@@ -160,15 +172,20 @@ def main():
     args.name = args.model_name + "_" + args.kernel + "_" + str(args.K) + "_" + str(args.wo_peripheral_edge) + \
                 "_" + str(args.wo_peripheral_configuration) + "_" + str(args.wo_path_encoding) + "_" + str(
         args.wo_edge_feature)
+
     # Set up logging and devices
     args.save_dir = train_utils.get_save_dir(args.save_dir, args.name, type=args.dataset_name)
     log = train_utils.get_logger(args.save_dir, args.name)
     device, args.gpu_ids = train_utils.get_available_devices()
-    if len(args.gpu_ids) > 1:
+    if len(args.gpu_ids) > 1 and args.parallel:
+        log.info(f'Using multi-gpu training')
         args.parallel = True
+        loader = DataListLoader
+        args.batch_size *= max(1, len(args.gpu_ids))
     else:
+        log.info(f'Using single-gpu training')
         args.parallel = False
-    args.batch_size *= max(1, len(args.gpu_ids))
+        loader = DataLoader
 
     # Set random seed
     log.info(f'Using random seed {args.seed}...')
@@ -177,28 +194,28 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    def pre_transform(g):
+    def multihop_transform(g):
         return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
                                            args.max_edge_count,
                                            args.max_distance_count, args.kernel)
-
-    transform = post_transform(args.wo_path_encoding, args.wo_edge_feature)
-
     if args.use_rd:
         rd_feature = resistance_distance
     else:
         def rd_feature(g):
             return g
 
+
+    transform = post_transform(args.wo_path_encoding, args.wo_edge_feature)
+
+
     path = "data/GNNBenchmarking"
     if os.path.exists(path + "/" + args.dataset_name + '/processed') and args.reprocess:
         shutil.rmtree(path + "/" + args.dataset_name + '/processed')
 
     dataset = GNNBenchmarkDataset(root=path, name=args.dataset_name,
-                                  pre_transform=T.Compose([add_ones, pre_transform, rd_feature]),
+                                  pre_transform=T.Compose([node_feature_transform, multihop_transform, rd_feature]),
                                   transform=transform)
 
-    # additional parameter for SR dataset and training
     args.input_size = dataset.num_features
     args.output_size = dataset.num_classes
 
@@ -211,13 +228,12 @@ def main():
     for fold, (train_idx, test_idx, val_idx) in enumerate(
             zip(*train_utils.k_fold(dataset, args.split, args.seed))):
 
-        log.info(f"---------------Training on fold {fold}------------------------")
+        log.info(f"---------------Training on fold {fold + 1}------------------------")
         best_val_acc = 0
         best_test_acc = 0
         # get model
         model = get_model(args)
         model.to(device)
-        model.train()
         pytorch_total_params = train_utils.count_parameters(model)
         log.info(f'The total parameters of model :{[pytorch_total_params]}')
 
@@ -226,31 +242,33 @@ def main():
         val_dataset = dataset[val_idx]
         test_dataset = dataset[test_idx]
 
-        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, collate_fn=PyG_collate,
-                                num_workers=args.num_workers)
-        test_loader = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=PyG_collate,
-                                 num_workers=args.num_workers)
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=PyG_collate,
-                                  num_workers=args.num_workers)
-        best_val_loss, best_test_acc, best_train_acc = 100, 0, 0
 
+        val_loader = loader(val_dataset, batch_size=args.batch_size, num_workers=args.num_workers)
+        test_loader = loader(test_dataset, batch_size=args.batch_size, num_workers=args.num_workers)
+        train_loader = loader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+        best_val_loss, best_test_acc, best_train_acc = 100, 0, 0
+        start_outer = time.time()
         for epoch in range(args.num_epochs):
             start = time.time()
-            train_loss = train(train_loader, model, optimizer, device=device)
+            train_loss = train(train_loader, model, optimizer, device=device, parallel=args.parallel)
             lr = optimizer.param_groups[0]['lr']
-            log.info(f"evaluate after epoch {epoch + 1}...")
-            model.eval()
-            val_acc = test(val_loader, model, device=device)
+            val_acc = val(val_loader, model, device=device, parallel=args.parallel)
             if val_acc >= best_val_acc:
-                test_acc = test(test_loader, model, device=device)
+                test_acc = val(test_loader, model, device=device, parallel=args.parallel)
                 best_val_acc = val_acc
                 best_test_acc = test_acc
 
             time_per_epoch = time.time() - start
 
             log.info('Epoch: {:03d}, LR: {:7f}, Train Loss: {:.7f}, '
-                     'Val Acc: {:.7f}, Test Acc: {:.7f}, Best Val Acc: {:.7f}, Best Test Acc: {:.7f}, time: {:.4f}'.format(
+                     'Val Acc: {:.7f}, Test Acc: {:.7f}, Best Val Acc: {:.7f}, Best Test Acc: {:.7f}, Seconds: {:.4f}'.format(
                 epoch + 1, lr, train_loss, val_acc, test_acc, best_val_acc, best_test_acc, time_per_epoch))
+
+            torch.cuda.empty_cache()  # empty test part memory cost
+
+        time_average_epoch = time.time() - start_outer
+        log.info(
+            f'Fold {fold + 1}, Vali: {best_val_acc}, Test: {best_test_acc}, Seconds/epoch: {time_average_epoch / (epoch+1)}')
         val_accs[fold] = best_val_acc
         test_accs[fold] = best_test_acc
 

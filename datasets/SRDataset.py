@@ -1,9 +1,11 @@
-from torch_geometric.data import InMemoryDataset
-import torch
-from torch_geometric.utils import to_undirected
-from torch_geometric.data.data import Data
 import networkx as nx
 import numpy as np
+import torch
+from torch_geometric.data import InMemoryDataset
+from torch_geometric.data.data import Data
+from torch_geometric.utils import to_undirected
+
+
 class SRDataset(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None):
         super(SRDataset, self).__init__(root, transform, pre_transform)
