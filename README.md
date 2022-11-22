@@ -1,7 +1,7 @@
 # How powerful are K-hop message passing graph neural networks
 This repository is the official implementation of the model in the [**How powerful are K-hop message passing graph neural networks**](https://openreview.net/forum?id=nN3aVRQsxGd&noteId=TBGwgubYuA6)
 ## News
-In version 3.0 we add support for multi-gpu training with DataParallel in torch. Code will auto detect the gpu device in your machine. To use multi-gpu training, Simply add `--parallel`, for example:
+In version 3.0 we add support for multi-gpu training with DataParallel in torch. Code will auto-detect gpu devices in your machine. To use multi-gpu training, simply add `--parallel`. For example:
 ```
 python train_CSL.py --parallel
 ```
@@ -13,10 +13,14 @@ PyG=2.0.4
 OGB=1.3.4
 ```
 ## Usages
-Switch between the shortest path distance kernel or graph diffusion kernel:
+Switch between the shortest path distance kernel and graph diffusion kernel:
 ```
 --kernel=spd
 --kernel=gd
+```
+Use different number of hop:
+```
+--K=6
 ```
 To run KP-GNN, set:
 ```
@@ -32,36 +36,53 @@ To run normal K-hop GNN, set:
 ```
 --wo_peripheral_edge --wo_peripheral_configuration 
 ```
-For more details about these model and parameters, please check our paper.
+For more details about these models and parameters, please check our paper.
 
 ### Simulation datasets for validating expressive power
-Run EXP with searching of different kernel and K:
+EXP dataset:
 ```
+# run single model
+python train_EXP.py
+# search for different K and model
 python run_EXP_search.py
 # multi-gpu
 python run_EXP_search.py --parallel
 ```
-Run SR25 with searching of different kernel and K:
+SR25 dataset:
 ```
+# run single model
+python train_SR.py
+# search for different K and model
 python run_SR_search.py
 # multi-gpu
 python run_SR_search.py --parallel
 ```
-Run CSL with searching of different kernel and K:
+CSL dataset:
 ```
+# run single model
+python train_CSL.py
+
+# search for different K and model
 python run_CSL_search.py
 # multi-gpu
 python run_CSL_search.py --parallel
 ```
-### Simulation dataset for node/graph properites and substructure
-Run node/graph properites search:
+### Simulation dataset for node/graph properties and substructure
+Node/graph properties:
 ```
+# single task
+python train_graph_property.py --task=0
+python train_node_property.py --task=0
+# run all tasks with search
 python run_graph_node_property.py
-#multi-gpu
+# multi-gpu
 python run_graph_node_property.py --parallel
 ```
-Run substructure counting search:
+Substructure counting:
 ```
+# single task
+python train_structure_counting.py --task=0
+# run all tasks with search
 python run_structure_counting.py
 #multi-gpu
 python run_structure_counting.py --parallel
@@ -79,6 +100,9 @@ python run_TU_search.py --parallel
 ```
 Run QM9 targets:
 ```
+# single target
+python train_qm9.py --task=7
+#all targets
 python run_qm9_search.py
 #multi-gpu
 python run_qm9_search.py --parallel
