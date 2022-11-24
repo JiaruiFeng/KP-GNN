@@ -8,10 +8,10 @@ import shutil
 import time
 from itertools import product
 from json import dumps
-import torch.nn.functional as F
+
 import numpy as np
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 import torch_geometric.transforms as T
 from torch.optim import Adam
 from torch_geometric.loader import DataListLoader, DataLoader
@@ -19,14 +19,15 @@ from torch_geometric.nn import DataParallel
 from tqdm import tqdm
 
 import train_utils
-from data_utils import extract_multi_hop_neighbors, PyG_collate, resistance_distance, post_transform
+from data_utils import extract_multi_hop_neighbors, resistance_distance, post_transform
 from datasets.tu_dataset import TUDatasetGINSplit, TUDataset
 from layers.input_encoder import LinearEncoder
 from layers.layer_utils import make_gnn_layer
 from models.GraphClassification import GraphClassification
 from models.model_utils import make_GNN
-# os.environ["CUDA_LAUNCH_BLOCKING"]="1"
 
+
+# os.environ["CUDA_LAUNCH_BLOCKING"]="1"
 
 
 def train_TU(loader, model, optimizer, device, parallel=False):
@@ -200,7 +201,6 @@ def cross_validation_with_PyG_dataset(dataset, args, device, loader, log=None, s
             if epoch % lr_decay_step_size == 0:
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = args.factor * param_group["lr"]
-
 
         t_end = time.perf_counter()
         durations.append(t_end - t_start)
@@ -404,12 +404,14 @@ def main():
                     shutil.rmtree(path + "/" + args.dataset_name + '/processed')
                 if args.dataset_name == "DD":
                     dataset = TUDataset(path, args.dataset_name,
-                                        pre_transform=T.Compose([edge_feature_transform, multihop_transform, rd_feature]),
+                                        pre_transform=T.Compose(
+                                            [edge_feature_transform, multihop_transform, rd_feature]),
                                         transform=transform,
                                         cleaned=False)
                 else:
                     dataset = TUDatasetGINSplit(args.dataset_name, path,
-                                                pre_transform=T.Compose([edge_feature_transform, multihop_transform, rd_feature]),
+                                                pre_transform=T.Compose(
+                                                    [edge_feature_transform, multihop_transform, rd_feature]),
                                                 transform=transform)
 
                 args.input_size = dataset.num_node_features
@@ -485,7 +487,8 @@ def main():
 
         else:
             dataset = TUDatasetGINSplit(args.dataset_name, path,
-                                        pre_transform=T.Compose([edge_feature_transform, multihop_transform, rd_feature]),
+                                        pre_transform=T.Compose(
+                                            [edge_feature_transform, multihop_transform, rd_feature]),
                                         transform=transform)
 
         args.input_size = dataset.num_node_features

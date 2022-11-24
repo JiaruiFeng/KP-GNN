@@ -5,28 +5,26 @@ import argparse
 import os
 import random
 import shutil
-from collections import OrderedDict
 from json import dumps
 from time import time
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 import torch.optim as optim
-import torch.utils.data as data
 import torch_geometric.transforms as T
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from tqdm import tqdm
+from torch_geometric.loader import DataListLoader, DataLoader
+from torch_geometric.nn import DataParallel
+
 import train_utils
-from data_utils import extract_multi_hop_neighbors, PyG_collate, resistance_distance, post_transform
+from data_utils import extract_multi_hop_neighbors, resistance_distance, post_transform
 from datasets.ZINC_dataset import ZINC
 from layers.input_encoder import EmbeddingEncoder
 from layers.layer_utils import make_gnn_layer
 from models.GraphRegression import GraphRegression
 from models.model_utils import make_GNN
 from train_utils import count_parameters
-from torch_geometric.loader import DataListLoader, DataLoader
-from torch_geometric.nn import DataParallel
+
 
 # os.environ["CUDA_LAUNCH_BLOCKING"]="1"
 def train(loader, model, device, optimizer, parallel=False):
@@ -94,7 +92,7 @@ def get_model(args):
     model.reset_parameters()
     # If use multiple gpu, torch geometric model must use DataParallel class
     if args.parallel:
-       model = DataParallel(model, args.gpu_ids)
+        model = DataParallel(model, args.gpu_ids)
 
     return model
 
@@ -286,7 +284,8 @@ def main():
             print('-' * 89)
             print('Exiting from training early because of KeyboardInterrupt')
         time_average_epoch = time() - start_outer
-        log.info(f'Run: {run},  Best Val:{best_valid_perf:.4f}, Best Test: {best_test_perf:.4f},Seconds/epoch: : {time_average_epoch / epoch}')
+        log.info(
+            f'Run: {run},  Best Val:{best_valid_perf:.4f}, Best Test: {best_test_perf:.4f},Seconds/epoch: : {time_average_epoch / epoch}')
         test_perfs.append(best_test_perf)
         vali_perfs.append(best_valid_perf)
 

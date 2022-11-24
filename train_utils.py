@@ -7,7 +7,6 @@ import queue
 import shutil
 
 import torch
-import torch.nn.functional as F
 from sklearn.model_selection import StratifiedKFold, KFold
 from tqdm import tqdm
 
