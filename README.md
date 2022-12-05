@@ -9,7 +9,7 @@ python train_CSL.py --parallel
 ```
 python=3.8
 torch=1.11.0
-PyG=2.0.4
+PyG=2.1.0
 OGB=1.3.4
 ```
 ## Usages
