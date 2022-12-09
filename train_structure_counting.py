@@ -39,7 +39,7 @@ def train(loader, model, task, optimizer, device, parallel=False):
             data = data.to(device)
             y = data.y
         pre = model(data).squeeze()
-        loss = (pre - y[:, task:task + 1].squeeze()).square().mean()
+        loss = (pre - y[:, task:task + 1].squeeze()).abs().mean()
 
         loss.backward()
         total_loss += loss.item() * num_graphs
@@ -58,7 +58,7 @@ def test(loader, model, task, device, parallel=False):
         else:
             data = data.to(device)
             y = data.y
-        total_error += (model(data).squeeze() - y[:, task:task + 1].squeeze()).square().sum().item()
+        total_error += (model(data).squeeze() - y[:, task:task + 1].squeeze()).abs().sum().item()
     model.train()
     return total_error / len(loader.dataset)
 

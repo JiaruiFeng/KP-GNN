@@ -67,8 +67,6 @@ class GNN(nn.Module):
             self.attention_lstm = nn.LSTM(self.hidden_size, self.num_layer, 1, batch_first=True, bidirectional=True,
                                           dropout=0.)
 
-        if self.num_layer < 2:
-            raise ValueError("Number of GNN layers must be greater than 1.")
 
         # embedding start from 1
         self.init_proj = init_emb
@@ -285,8 +283,7 @@ class GNNPlus(nn.Module):
             self.attention_lstm = nn.LSTM(self.hidden_size, self.num_layer, 1, batch_first=True, bidirectional=True,
                                           dropout=0.)
 
-        if self.num_layer < 2:
-            raise ValueError("Number of GNN layers must be greater than 1.")
+
 
         # embedding start from 1
         self.init_proj = init_emb
