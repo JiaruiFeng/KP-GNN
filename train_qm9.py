@@ -299,11 +299,8 @@ def main():
         scheduler.step(val_error)
 
         if val_error <= best_val_error:
-            test_error = test(test_loader, model, args.task, std, device, parallel=args.parallel)
             best_val_error = val_error
-            torch.save(model.state_dict(),
-                       os.path.join(args.save_dir, f'best_model.pth'))
-
+            test_error = test(test_loader, model, args.task, std, device, parallel=args.parallel)
         time_per_epoch = time.time() - start
         info = (
                 'Epoch: {:03d}, LR: {:7f}, Loss: {:.7f}, Validation MAE: {:.7f}, ' +
@@ -321,8 +318,15 @@ def main():
             break
         torch.cuda.empty_cache()  # empty test part memory cost
     time_average_epoch = time.time() - start_outer
-    log.info(
-        f'Vali: {best_val_error}, Test: {best_val_error}, Seconds/epoch: {time_average_epoch / epoch}')
+    info = ('Validation MAE: {:.7f}, Test MAE: {:.7f}, Test MAE norm: {:.7f}, Test MAE convert: {:.7f}, Seconds/epoch: {:.4f}'
+    ).format(
+        best_val_error,
+        test_error,
+        test_error / std[args.task].cuda(),
+        test_error / conversion[int(args.task)].cuda() if args.convert == 'post' else 0,
+        time_average_epoch / epoch
+    )
+    log.info(info)
 
 
 if __name__ == "__main__":
