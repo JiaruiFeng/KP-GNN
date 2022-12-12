@@ -32,7 +32,6 @@ def train(loader, model, device, optimizer, parallel=False):
     total_loss = 0
     for data in loader:
         optimizer.zero_grad()
-        optimizer.zero_grad()
         if parallel:
             num_graphs = len(data)
             y = torch.cat([d.y for d in data]).to(device)
@@ -54,12 +53,11 @@ def test(loader, model, device, parallel=False):
     model.eval()
     total_mae = 0
     for data in loader:
-        for data in loader:
-            if parallel:
-                y = torch.cat([d.y for d in data]).to(device)
-            else:
-                data = data.to(device)
-                y = data.y
+        if parallel:
+            y = torch.cat([d.y for d in data]).to(device)
+        else:
+            data = data.to(device)
+            y = data.y
         score = model(data)
         total_mae += (score - y).abs().sum().item()
 
@@ -106,7 +104,7 @@ def edge_feature_transform(data):
 def main():
     parser = argparse.ArgumentParser(f'arguments for training and testing')
     parser.add_argument('--save_dir', type=str, default='./save', help='Base directory for saving information.')
-    parser.add_argument('--seed', type=int, default=234, help='Random seed for reproducibility.')
+    parser.add_argument('--seed', type=list, default=[123, 234, 345, 456], help='Random seed for reproducibility.')
     parser.add_argument('--dataset_name', type=str, default="ZINC", help='name of dataset')
     parser.add_argument('--drop_prob', type=float, default=0.0,
                         help='Probability of zeroing an activation in dropout layers.')
@@ -192,12 +190,7 @@ def main():
         args.parallel = False
         loader = DataLoader
 
-    # Set random seed
-    log.info(f'Using random seed {args.seed}...')
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+
 
     def multihop_transform(g):
         return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
@@ -239,6 +232,13 @@ def main():
     test_perfs = []
     vali_perfs = []
     for run in range(1, args.runs + 1):
+        # Set random seed
+        log.info(f'Using random seed {args.seed[run-1]}...')
+        random.seed(args.seed[run-1])
+        np.random.seed(args.seed[run-1])
+        torch.manual_seed(args.seed[run-1])
+        torch.cuda.manual_seed_all(args.seed[run-1])
+
         # Get your model
         log.info('Building model...')
         model = get_model(args)

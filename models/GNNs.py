@@ -265,6 +265,8 @@ class GNNPlus(nn.Module):
         self.num_layer = num_layer
         self.hidden_size = gnn_layer[-1].output_size
         self.K = gnn_layer[-1].K
+        #for GNN+, number of layer must be at least equal to K to get all information up to K-hop.
+        assert num_layer >= self.K
         self.dropout = nn.Dropout(drop_prob)
         self.JK = JK
         self.residual = residual
