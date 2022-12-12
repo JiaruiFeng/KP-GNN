@@ -109,7 +109,7 @@ python run_qm9_search.py --parallel
 ```
 Run ZINC dataset:
 ```
-python train_ZINC.py
+python train_ZINC.py --residual
 ```
 ## Reference
 If you find the code useful, please cite our paper:
