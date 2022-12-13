@@ -21,13 +21,13 @@ def extract_multi_hop_neighbors(data, K, max_edge_attr_num, max_hop_num,
                                 max_edge_type, max_edge_count, max_distance_count, kernel):
     """generate multi-hop neighbors for input PyG graph using shortest path distance kernel
     Args:
-        data(torch_geometric.data.Data): PyG graph data instance
-        K(int): number of hop
-        max_edge_attr_num(int): maximum number of encoding used for hopk edge
-        max_hop_num(int): maximum number of hop to consider in computing node configuration of peripheral subgraph
-        max_edge_type(int): maximum number of edge type to consider
-        max_edge_count(int): maximum number of count for each type of edge
-        max_distance_count(int): maximum number of count for each distance
+        data (torch_geometric.data.Data): PyG graph data instance
+        K (int): number of hop
+        max_edge_attr_num (int): maximum number of encoding used for hopk edge
+        max_hop_num (int): maximum number of hop to consider in computing node configuration of peripheral subgraph
+        max_edge_type (int): maximum number of edge type to consider
+        max_edge_count (int): maximum number of count for each type of edge
+        max_distance_count (int): maximum number of count for each distance
         kernel (str): kernel used to extract neighbors
     """
     assert (isinstance(data, Data))
@@ -109,8 +109,8 @@ def extract_multi_hop_neighbors(data, K, max_edge_attr_num, max_hop_num,
 
 def adj_K_order(adj, K):
     """compute the K order of adjacency given scipy matrix
-    adj(coo_matrix): adjacency matrix
-    K(int): number of hop
+    adj (coo_matrix): adjacency matrix
+    K (int): number of hop
     """
     adj_list = [c(adj)]
     for i in range(K - 1):
@@ -129,12 +129,12 @@ def get_peripheral_attr(adj_list, edge_attr_adj, max_hop_num,
                         max_edge_type, max_edge_count, max_distance_count):
     """Compute peripheral information for each node in graph
     Args:
-        adj_list(list): adjacency matrix list of data for each hop
-        edge_attr_adj(torch.tensor):edge feature matrix
-        max_hop_num(int): maximum number of hop to consider in computing node configuration of peripheral subgraph
-        max_edge_type(int): maximum number of edge type to consider
-        max_edge_count(int): maximum number of count for each type of edge
-        max_distance_count(int): maximum number of count for each distance
+        adj_list (list): adjacency matrix list of data for each hop
+        edge_attr_adj (torch.tensor):edge feature matrix
+        max_hop_num (int): maximum number of hop to consider in computing node configuration of peripheral subgraph
+        max_edge_type (int): maximum number of edge type to consider
+        max_edge_count (int): maximum number of count for each type of edge
+        max_distance_count (int): maximum number of count for each distance
     """
     K = len(adj_list)
     num_nodes = edge_attr_adj.size(0)
@@ -162,86 +162,15 @@ def get_peripheral_attr(adj_list, edge_attr_adj, max_hop_num,
     return peripheral_edge_attr, peripheral_configuration_attr
 
 
-#
-# def extract_peripheral_edges(adj,edge_attr_adj,max_edge_num,max_component_num):
-#     """extract peripheral edge information for each node using input adj and save edge attr information given edge attr adj
-#     Args:
-#         adj(torch.tensor): adjacency matrix
-#         edge_attr_adj(torch.tensor) edge attr adjacency matrix
-#         max_edge_num(int): maximum number of edge to keep
-#     """
-#     num_nodes=edge_attr_adj.size(0)
-#     feature_size=edge_attr_adj[0,0].size() #f
-#     if len(feature_size)==0:
-#         feature_size=[1]
-#         edge_attr_adj=edge_attr_adj.unsqueeze(-1)
-#     peripheral_edge_list=[]
-#     direct_edge_adj=(torch.sum(edge_attr_adj,dim=-1)>0).int() # N * N
-#     if max_component_num==0:
-#         component_dim=1
-#     else:
-#         component_dim=max_component_num
-#     matrix_size=list(itertools.chain.from_iterable([[num_nodes,component_dim,max_edge_num],feature_size]))
-#     peripheral_edge_matrix=torch.zeros(matrix_size,dtype=torch.long)
-#     for i in range(num_nodes):
-#         row=torch.where(adj[i]>0)[0]
-#         # if node have no neighbors, skip
-#         if len(row)<=1:
-#             continue
-#
-#         peripheral_index=torch.combinations(row)
-#         peripheral_edge_mask=direct_edge_adj[peripheral_index[:,0],peripheral_index[:,1]] # E'
-#         peripheral_edge_list=peripheral_index[peripheral_edge_mask>0] # E'
-#         if peripheral_edge_list.size(0)==0:
-#             continue
-#
-#         g=nx.from_edgelist(peripheral_edge_list.numpy())
-#         if max_component_num>0:
-#             S = [g.subgraph(c).copy() for c in nx.connected_components(g)]
-#             for j,s in enumerate(S):
-#                 if j>=max_component_num:
-#                     break
-#                 s_edge_index=torch.from_numpy(np.array(s.edges).T).long()
-#                 s_edge_attr=edge_attr_adj[s_edge_index[0,:],s_edge_index[1,:]]
-#                 edge_num=s_edge_attr.size(0)
-#                 if edge_num>max_edge_num:
-#                     edge_num=max_edge_num
-#                 peripheral_edge_matrix[i,j,:edge_num]=s_edge_attr[:edge_num]
-#         else:
-#             s=g
-#             s_edge_index = torch.from_numpy(np.array(s.edges).T).long()
-#             s_edge_attr = edge_attr_adj[s_edge_index[0, :], s_edge_index[1, :]]
-#             edge_num = s_edge_attr.size(0)
-#             if edge_num > max_edge_num:
-#                 edge_num = max_edge_num
-#             peripheral_edge_matrix[i, 0, :edge_num] = s_edge_attr[:edge_num]
-#
-#     return peripheral_edge_matrix
-
-def feature_hashing(x, max_feature_size):
-    """return unified index encoding given input feature tensor and maximum index for each feature dimension.
-    Args:
-        x(torch.tensor): input tensor with size of [...,f]
-        maximum_feature_size: maximum feature size for each dimension [f]
-    """
-
-    assert x.size(-1) == max_feature_size.size(-1) - 1
-    assert x.dtype in [torch.int, torch.long]
-    index_increment = max_feature_size.cumprod(-1)[:-1]
-    index_increment = index_increment.unsqueeze(0)
-    x = x * index_increment
-    return x.sum(-1)
-
-
 def extract_peripheral_attr_v2(adj, k_adj, max_hop_num, max_edge_type, max_edge_count, max_distance_count):
     """extract peripheral attr information for each node using adj at this hop and original adj
     Args:
-        adj(torch.tensor): adjacency matrix of original graph N*N, different number means different edge type
-        k_adj(torch.tensor): adjacency matrix at the hop we want to extract peripheral information N*N
-        max_hop_num(int): maximum number of hop to consider in computing node configuration of peripheral subgraph
-        max_edge_type(int): maximum number of edge type to consider
-        max_edge_count(int): maximum number of count for each type of edge
-        max_distance_count(int): maximum number of count for each distance
+        adj (torch.tensor): adjacency matrix of original graph N*N, different number means different edge type
+        k_adj (torch.tensor): adjacency matrix at the hop we want to extract peripheral information N*N
+        max_hop_num (int): maximum number of hop to consider in computing node configuration of peripheral subgraph
+        max_edge_type (int): maximum number of edge type to consider
+        max_edge_count (int): maximum number of count for each type of edge
+        max_distance_count (int): maximum number of count for each distance
     """
     num_nodes = adj.size(0)
 
@@ -295,8 +224,8 @@ def extract_peripheral_attr_v2(adj, k_adj, max_hop_num, max_edge_type, max_edge_
 def nx_compute_shortest_path_length(G, max_length):
     """Compute all pair shortest path length in the graph
     Args:
-        G(networkx): input graph
-        max_length(int): max length when computing shortest path
+        G (networkx): input graph
+        max_length (int): max length when computing shortest path
 
     """
     num_node = G.number_of_nodes()
@@ -313,8 +242,11 @@ def nx_compute_shortest_path_length(G, max_length):
 
 
 def to_dense_edge_feature(edge_feature, edge_index, num_nodes):
-    """
-    convert edge feature to dense adj
+    """Convert edge feature to dense adj
+    Args:
+        edge_feature (torch.tensor): original edge feature
+        edge_index (torch.tensor): edge index
+        num_nodes (int): number of node in graph
     """
     edge_feature = edge_feature.squeeze()
     K = list(edge_feature.size()[1:])
@@ -372,6 +304,11 @@ def resistance_distance(data):
 
 
 def post_transform(wo_path_encoding, wo_edge_feature):
+    """Post transformation of dataset for KP-GNN
+    Args:
+        wo_path_encoding (bool): If true, remove path encoding from model
+        wo_edge_feature (bool): If true, remove edge feature from model
+    """
     if wo_path_encoding and wo_edge_feature:
         def transform(g):
             edge_attr = g.edge_attr

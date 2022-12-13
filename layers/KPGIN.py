@@ -13,14 +13,14 @@ class KPGINConv(MessagePassing):
     """
     KP-GNN with GIN kernel
     Args:
-        input_size(int): the size of input feature
-        output_size(int): the size of output feature
-        K(int): number of hop to consider in Convolution layer
-        eps(float): initial epsilon
-        train_eps(bool):whether the epsilon is trainable
-        num_hop1_edge(int): number of edge type at 1 hop
-        num_pe(int): maximum number of path encoding, larger or equal to 1
-        combine(str): combination method for information in different hop. select from(geometric, attention)
+        input_size (int): the size of input feature
+        output_size (int): the size of output feature
+        K (int): number of hop to consider in Convolution layer
+        eps (float): initial epsilon
+        train_eps (bool):whether the epsilon is trainable
+        num_hop1_edge (int): number of edge type at 1 hop
+        num_pe (int): maximum number of path encoding, larger or equal to 1
+        combine (str): combination method for information in different hop. select from(geometric, attention)
     """
 
     def __init__(self, input_size, output_size, K, eps=0., train_eps=False, num_hop1_edge=1, num_pe=1,
@@ -45,11 +45,6 @@ class KPGINConv(MessagePassing):
         else:
             self.register_buffer('eps', torch.Tensor([eps]))
 
-        '''
-        edge embedding for 1-hop and k-hop
-        Notice that in hops larger than one, there is no actually edge feature, therefore need addtional embedding layer to encode
-        self defined features like path encoding
-        '''
         # add 2 to keep 0(mask) and 1(self connection)
         self.hop1_edge_emb = torch.nn.Embedding(num_hop1_edge + 2, self.input_dk, padding_idx=0)
         # If K larger than 1, define additional embedding and combine function

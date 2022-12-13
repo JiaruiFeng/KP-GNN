@@ -8,8 +8,8 @@ class NodeClassification(nn.Module):
     def __init__(self, embedding_model, output_size):
         """framework for node classification
         Args:
-            embedding_model(nn.Module):  graph neural network embedding model
-            output_size(int): output size, equal to the number of class for classification
+            embedding_model (nn.Module):  graph neural network embedding model
+            output_size (int): output size, equal to the number of class for classification
         """
         super(NodeClassification, self).__init__()
         self.embedding_model = embedding_model

@@ -15,6 +15,7 @@ from torch.optim import Adam
 from torch_geometric.loader import DataListLoader, DataLoader
 from torch_geometric.nn import DataParallel
 from torch_geometric.datasets import GNNBenchmarkDataset
+from torch_geometric.seed import seed_everything
 import torch.nn.functional as F
 import train_utils
 from data_utils import extract_multi_hop_neighbors, post_transform, resistance_distance
@@ -103,24 +104,24 @@ def main():
     parser = argparse.ArgumentParser(f'arguments for training and testing')
     parser.add_argument('--save_dir', type=str, default='./save', help='Base directory for saving information.')
     parser.add_argument('--seed', type=int, default=224, help='Random seed for reproducibility.')
-    parser.add_argument('--dataset_name', type=str, default="CSL", help='name of dataset')
+    parser.add_argument('--dataset_name', type=str, default="CSL", help='Name of dataset')
     parser.add_argument('--drop_prob', type=float, default=0.,
                         help='Probability of zeroing an activation in dropout layers.')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size per GPU. Scales automatically when \
                             multiple GPUs are available.')
     parser.add_argument("--parallel", action="store_true",
                         help="If true, use DataParallel for multi-gpu training")
-    parser.add_argument('--num_workers', type=int, default=0, help='number of worker.')
+    parser.add_argument('--num_workers', type=int, default=0, help='Number of worker.')
     parser.add_argument('--load_path', type=str, default=None, help='Path to load as a model checkpoint.')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate.')
     parser.add_argument('--l2_wd', type=float, default=3e-6, help='L2 weight decay.')
     parser.add_argument("--kernel", type=str, default="spd", choices=("gd", "spd"),
-                        help="the kernel used for K-hop computation")
+                        help="The kernel used for K-hop computation")
     parser.add_argument('--num_epochs', type=int, default=200, help='Number of epochs.')
-    parser.add_argument("--hidden_size", type=int, default=48, help="hidden size of the model")
+    parser.add_argument("--hidden_size", type=int, default=48, help="Hidden size of the model")
     parser.add_argument("--model_name", type=str, default="KPGIN",
                         choices=("KPGCN", "KPGIN", "KPGraphSAGE", "KPGINPlus"), help="Base GNN model")
-    parser.add_argument("--K", type=int, default=4, help="number of hop to consider")
+    parser.add_argument("--K", type=int, default=4, help="Number of hop to consider")
     parser.add_argument("--max_pe_num", type=int, default=1000,
                         help="Maximum number of path encoding. Must be equal to or greater than 1")
     parser.add_argument("--max_edge_type", type=int, default=1,
@@ -132,36 +133,36 @@ def main():
     parser.add_argument("--max_distance_count", type=int, default=1000,
                         help="Maximum count per hop in peripheral configuration information")
     parser.add_argument('--wo_peripheral_edge', action='store_true',
-                        help='remove peripheral edge information from model')
+                        help='If true, remove peripheral edge information from model')
     parser.add_argument('--wo_peripheral_configuration', action='store_true',
-                        help='remove peripheral node configuration from model')
-    parser.add_argument("--wo_path_encoding", action="store_true", help="remove path encoding from model")
-    parser.add_argument("--wo_edge_feature", action="store_true", help="remove edge feature from model")
+                        help='If true, remove peripheral node configuration from model')
+    parser.add_argument("--wo_path_encoding", action="store_true", help="If true, remove path encoding from model")
+    parser.add_argument("--wo_edge_feature", action="store_true", help="If true, remove edge feature from model")
     parser.add_argument("--num_hop1_edge", type=int, default=1, help="Number of edge type in hop 1")
     parser.add_argument("--num_layer", type=int, default=4, help="Number of layer for feature encoder")
     parser.add_argument("--JK", type=str, default="last", choices=("sum", "max", "mean", "attention", "last"),
                         help="Jumping knowledge method")
-    parser.add_argument("--residual", action="store_true", help="Whether to use residual connection between each layer")
-    parser.add_argument("--use_rd", action="store_true", help="Whether to add resistance distance feature to model")
+    parser.add_argument("--residual", action="store_true", help="If true, use residual connection between each layer")
+    parser.add_argument("--use_rd", action="store_true", help="If true, add resistance distance feature to model")
     parser.add_argument("--virtual_node", action="store_true",
-                        help="Whether add virtual node information in each layer")
-    parser.add_argument("--eps", type=float, default=0., help="Initital epsilon in GIN")
+                        help="If true, add virtual node information in each layer")
+    parser.add_argument("--eps", type=float, default=0., help="Initial epsilon in GIN")
     parser.add_argument("--train_eps", action="store_true", help="Whether the epsilon is trainable")
     parser.add_argument("--combine", type=str, default="geometric", choices=("attention", "geometric"),
-                        help="Jumping knowledge method")
+                        help="Combine method in k-hop aggregation")
     parser.add_argument("--pooling_method", type=str, default="sum", choices=("mean", "sum", "attention"),
-                        help="pooling method in graph classification")
+                        help="Pooling method in graph classification")
     parser.add_argument('--norm_type', type=str, default="Batch",
                         choices=("Batch", "Layer", "Instance", "GraphSize", "Pair"),
-                        help="normalization method in model")
+                        help="Normalization method in model")
     parser.add_argument('--aggr', type=str, default="add",
-                        help='aggregation method in GNN layer, only works in GraphSAGE')
-    parser.add_argument('--split', type=int, default=10, help='number of fold in cross validation')
+                        help='Aggregation method in GNN layer, only works in GraphSAGE')
+    parser.add_argument('--split', type=int, default=10, help='Number of fold in cross validation')
     parser.add_argument('--factor', type=float, default=0.5,
-                        help='factor in the ReduceLROnPlateau learning rate scheduler')
+                        help='Factor in the ReduceLROnPlateau learning rate scheduler')
     parser.add_argument('--patience', type=int, default=5,
-                        help='patience in the ReduceLROnPlateau learning rate scheduler')
-    parser.add_argument('--reprocess', action="store_true", help='Whether to reprocess the dataset')
+                        help='Patience in the ReduceLROnPlateau learning rate scheduler')
+    parser.add_argument('--reprocess', action="store_true", help='If true, reprocess the dataset')
 
     args = parser.parse_args()
     if args.wo_path_encoding:
@@ -188,11 +189,9 @@ def main():
         loader = DataLoader
 
     # Set random seed
-    log.info(f'Using random seed {args.seed}...')
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    seed = train_utils.get_seed(args.seed)
+    log.info(f'Using random seed {seed}...')
+    seed_everything(seed)
 
     def multihop_transform(g):
         return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
@@ -204,9 +203,7 @@ def main():
         def rd_feature(g):
             return g
 
-
     transform = post_transform(args.wo_path_encoding, args.wo_edge_feature)
-
 
     path = "data/GNNBenchmarking"
     if os.path.exists(path + "/" + args.dataset_name + '/processed') and args.reprocess:
@@ -229,8 +226,6 @@ def main():
             zip(*train_utils.k_fold(dataset, args.split, args.seed))):
 
         log.info(f"---------------Training on fold {fold + 1}------------------------")
-        best_val_acc = 0
-        best_test_acc = 0
         # get model
         model = get_model(args)
         model.to(device)
@@ -246,7 +241,7 @@ def main():
         val_loader = loader(val_dataset, batch_size=args.batch_size, num_workers=args.num_workers)
         test_loader = loader(test_dataset, batch_size=args.batch_size, num_workers=args.num_workers)
         train_loader = loader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-        best_val_loss, best_test_acc, best_train_acc = 100, 0, 0
+        best_val_loss, best_val_acc, best_test_acc, best_train_acc = 100, 0, 0, 0
         start_outer = time.time()
         for epoch in range(args.num_epochs):
             start = time.time()

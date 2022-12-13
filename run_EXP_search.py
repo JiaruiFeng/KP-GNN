@@ -15,14 +15,18 @@ grid = product(kernels, ks)
 if parallel:
     for parameters in grid:
         kernel, k = parameters
-        script = f"python train_EXP.py --kernel={kernel} --K={k} --num_layer=2 --reprocess --parallel"
+        # KP-GNN
+        script = f"python train_EXP.py --kernel={kernel} --K={k} --num_layer=2 --reprocess --wo_path_encoding --parallel"
         os.system(script)
-        script = f"python train_EXP.py --kernel={kernel} --K={k} --num_layer=2 --wo_peripheral_edge --wo_peripheral_configuration --reprocess --parallel"
+        # K-hop GNN
+        script = f"python train_EXP.py --kernel={kernel} --K={k} --num_layer=2 --wo_peripheral_edge --wo_peripheral_configuration --wo_path_encoding  --reprocess --parallel"
         os.system(script)
 else:
     for parameters in grid:
         kernel, k = parameters
-        script = f"python train_EXP.py --kernel={kernel} --K={k} --num_layer=2 --reprocess"
+        # KP-GNN
+        script = f"python train_EXP.py --kernel={kernel} --K={k} --num_layer=2 --wo_path_encoding --reprocess"
         os.system(script)
-        script = f"python train_EXP.py --kernel={kernel} --K={k} --num_layer=2 --wo_peripheral_edge --wo_peripheral_configuration --reprocess"
+        # K-hop GNN
+        script = f"python train_EXP.py --kernel={kernel} --K={k} --num_layer=2 --wo_peripheral_edge --wo_peripheral_configuration --wo_path_encoding --reprocess"
         os.system(script)

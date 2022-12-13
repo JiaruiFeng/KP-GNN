@@ -3,7 +3,6 @@ script to train on EXP classification dataset
 """
 import argparse
 import os
-import random
 import shutil
 import time
 from json import dumps
@@ -13,9 +12,9 @@ import torch
 import torch.nn.functional as F
 import torch_geometric.transforms as T
 from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch_geometric.loader import DataListLoader, DataLoader
 from torch_geometric.nn import DataParallel
+from torch_geometric.seed import seed_everything
 
 import train_utils
 from data_utils import extract_multi_hop_neighbors, resistance_distance, post_transform
@@ -27,6 +26,8 @@ from models.model_utils import make_GNN
 
 
 # os.environ["CUDA_LAUNCH_BLOCKING"]="1"
+
+
 def get_model(args):
     layer = make_gnn_layer(args)
     init_emb = EmbeddingEncoder(args.input_size, args.hidden_size)
@@ -156,32 +157,32 @@ def main():
     parser.add_argument("--max_distance_count", type=int, default=1000,
                         help="Maximum count per hop in peripheral configuration information")
     parser.add_argument('--wo_peripheral_edge', action='store_true',
-                        help='remove peripheral edge information from model')
+                        help='If true, remove peripheral edge information from model')
     parser.add_argument('--wo_peripheral_configuration', action='store_true',
-                        help='remove peripheral node configuration from model')
-    parser.add_argument("--wo_path_encoding", action="store_true", help="remove path encoding from model")
-    parser.add_argument("--wo_edge_feature", action="store_true", help="remove edge feature from model")
+                        help='If true, remove peripheral node configuration from model')
+    parser.add_argument("--wo_path_encoding", action="store_true", help="If true, remove path encoding from model")
+    parser.add_argument("--wo_edge_feature", action="store_true", help="If true, remove edge feature from model")
     parser.add_argument("--num_hop1_edge", type=int, default=1, help="Number of edge type in hop 1")
     parser.add_argument("--num_layer", type=int, default=3, help="Number of layer for feature encoder")
     parser.add_argument("--JK", type=str, default="last", choices=("sum", "max", "mean", "attention", "last"),
                         help="Jumping knowledge method")
-    parser.add_argument("--residual", action="store_true", help="Whether to use residual connection between each layer")
-    parser.add_argument("--use_rd", action="store_true", help="Whether to add resistance distance feature to model")
+    parser.add_argument("--residual", action="store_true", help="If true, use residual connection between each layer")
+    parser.add_argument("--use_rd", action="store_true", help="If true, add resistance distance feature to model")
     parser.add_argument("--virtual_node", action="store_true",
-                        help="Whether add virtual node information in each layer")
-    parser.add_argument("--eps", type=float, default=0., help="Initital epsilon in GIN")
-    parser.add_argument("--train_eps", action="store_true", help="Whether the epsilon is trainable")
+                        help="If true, add virtual node information in each layer")
+    parser.add_argument("--eps", type=float, default=0., help="Initial epsilon in GIN")
+    parser.add_argument("--train_eps", action="store_true", help="If true, the epsilon is trainable")
     parser.add_argument("--combine", type=str, default="geometric", choices=("attention", "geometric"),
-                        help="Jumping knowledge method")
+                        help="Combine method in k-hop aggregation")
     parser.add_argument("--pooling_method", type=str, default="sum", choices=("mean", "sum", "attention"),
-                        help="pooling method in graph classification")
+                        help="Pooling method in graph classification")
     parser.add_argument('--norm_type', type=str, default="Batch",
                         choices=("Batch", "Layer", "Instance", "GraphSize", "Pair"),
-                        help="normalization method in model")
+                        help="Normalization method in model")
     parser.add_argument('--aggr', type=str, default="add",
-                        help='aggregation method in GNN layer, only works in GraphSAGE')
-    parser.add_argument('--split', type=int, default=10, help='number of fold in cross validation')
-    parser.add_argument('--reprocess', action="store_true", help='Whether to reprocess the dataset')
+                        help='Aggregation method in GNN layer, only works in GraphSAGE')
+    parser.add_argument('--split', type=int, default=10, help='Number of fold in cross validation')
+    parser.add_argument('--reprocess', action="store_true", help='If true, reprocess the dataset')
     args = parser.parse_args()
     if args.wo_path_encoding:
         args.num_hopk_edge = 1
@@ -207,11 +208,9 @@ def main():
         loader = DataLoader
 
     # Set random seed
-    log.info(f'Using random seed {args.seed}...')
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    seed = train_utils.get_seed(args.seed)
+    log.info(f'Using random seed {seed}...')
+    seed_everything(seed)
 
     def multihop_transform(g):
         return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
@@ -321,7 +320,7 @@ def main():
         tr_acc.append(best_train_acc)
         time_average_epoch = time.time() - start_outer
         log.info(
-            f'Fold {i+1}, best train: {best_train_acc}, best test: {best_test_acc}, Seconds/epoch: {time_average_epoch / (epoch+1)}')
+            f'Fold {i + 1}, best train: {best_train_acc}, best test: {best_test_acc}, Seconds/epoch: {time_average_epoch / (epoch + 1)}')
     acc = torch.tensor(acc)
     tr_acc = torch.tensor(tr_acc)
     log.info("-------------------Print final result-------------------------")

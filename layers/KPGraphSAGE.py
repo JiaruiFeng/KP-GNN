@@ -13,13 +13,13 @@ class KPGraphSAGEConv(MessagePassing):
     """
     KP-GNN with GraphSAGE kernel
     Args:
-        input_size(int): the size of input feature
-        output_size(int): the size of output feature
-        K(int): number of hop to consider in Convolution layer
-        aggr(str): The aggregation function, default is mean for GraphSAGE
-        num_hop1_edge(int): number of edge type at 1 hop
-        num_pe(int): maximum number of path encoding, larger or equal to 1
-        combine(str): combination method for information in different hop. select from(geometric, attention)
+        input_size (int): the size of input feature
+        output_size (int): the size of output feature
+        K (int): number of hop to consider in Convolution layer
+        aggr (str): The aggregation function, default is mean for GraphSAGE
+        num_hop1_edge (int): number of edge type at 1 hop
+        num_pe (int): maximum number of path encoding, larger or equal to 1
+        combine (str): combination method for information in different hop. select from(geometric, attention)
 
     """
 
@@ -35,11 +35,7 @@ class KPGraphSAGEConv(MessagePassing):
         self.hop_proj = torch.nn.Parameter(torch.Tensor(self.K, 2 * self.input_dk, self.output_dk))
         self.hop_bias = torch.nn.Parameter(torch.Tensor(self.K, self.output_dk))
 
-        # edge embedding for 1-hop and k-hop
-        # Notice that in hop, there is no actually edge feature, therefore need addtional embedding layer to encode
-        # self defined features like path encoding
         self.hop1_edge_emb = torch.nn.Embedding(num_hop1_edge + 2, self.input_dk, padding_idx=0)
-
         # If K larger than 1, define additional embedding and combine function
         if self.K > 1:
             self.combine_proj = nn.Linear(self.output_dk, output_size)

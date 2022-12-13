@@ -5,7 +5,6 @@ Adpated from https://github.com/LingxiaoShawn/GNNAsKernel
 
 import argparse
 import os
-import random
 import shutil
 import time
 from json import dumps
@@ -17,6 +16,7 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch_geometric.loader import DataListLoader, DataLoader
 from torch_geometric.nn import DataParallel
+from torch_geometric.seed import seed_everything
 
 import train_utils
 from data_utils import extract_multi_hop_neighbors, resistance_distance, post_transform
@@ -28,6 +28,8 @@ from models.model_utils import make_GNN
 
 
 # os.environ["CUDA_LAUNCH_BLOCKING"]="1"
+
+
 def train(loader, model, task, optimizer, device, parallel=False):
     model.train()
     total_loss = 0
@@ -100,26 +102,26 @@ def main():
     parser = argparse.ArgumentParser(f'arguments for training and testing')
     parser.add_argument('--save_dir', type=str, default='./save', help='Base directory for saving information.')
     parser.add_argument('--seed', type=int, default=234, help='Random seed for reproducibility.')
-    parser.add_argument('--dataset_name', type=str, default="pna-simulation", help='name of dataset')
-    parser.add_argument('--task', type=int, default=1, choices=(0, 1, 2), help='number of task')
+    parser.add_argument('--dataset_name', type=str, default="pna-simulation", help='Name of dataset')
+    parser.add_argument('--task', type=int, default=1, choices=(0, 1, 2), help='Number of task')
     parser.add_argument('--drop_prob', type=float, default=0.,
                         help='Probability of zeroing an activation in dropout layers.')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size per GPU. Scales automatically when \
                             multiple GPUs are available.')
     parser.add_argument("--parallel", action="store_true",
                         help="If true, use DataParallel for multi-gpu training")
-    parser.add_argument('--num_workers', type=int, default=0, help='number of worker.')
+    parser.add_argument('--num_workers', type=int, default=0, help='Number of worker.')
     parser.add_argument('--load_path', type=str, default=None, help='Path to load as a model checkpoint.')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate.')
     parser.add_argument('--min_lr', type=float, default=1e-6, help='Minimum learning rate.')
     parser.add_argument('--l2_wd', type=float, default=3e-7, help='L2 weight decay.')
     parser.add_argument("--kernel", type=str, default="spd", choices=("gd", "spd"),
-                        help="the kernel used for K-hop computation")
+                        help="The kernel used for K-hop computation")
     parser.add_argument('--num_epochs', type=int, default=250, help='Number of epochs.')
-    parser.add_argument("--hidden_size", type=int, default=128, help="hidden size of the model")
-    parser.add_argument("--model_name", type=str, default="KPGINPlus", choices=("KPGIN", "KPGINPlus"),
-                        help="Jumping knowledge method")
-    parser.add_argument("--K", type=int, default=6, help="number of hop to consider")
+    parser.add_argument("--hidden_size", type=int, default=128, help="Hidden size of the model")
+    parser.add_argument("--model_name", type=str, default="KPGINPlus", choices=("KPGIN", "KPGINPlus", "KPGINPrime"),
+                        help="Base GNN model")
+    parser.add_argument("--K", type=int, default=6, help="Number of hop to consider")
     parser.add_argument("--max_pe_num", type=int, default=50,
                         help="Maximum number of path encoding. Must be equal to or greater than 1")
     parser.add_argument("--max_edge_type", type=int, default=1,
@@ -131,34 +133,34 @@ def main():
     parser.add_argument("--max_distance_count", type=int, default=100,
                         help="Maximum count per hop in peripheral configuration information")
     parser.add_argument('--wo_peripheral_edge', action='store_true',
-                        help='remove peripheral edge information from model')
+                        help='If true, remove peripheral edge information from model')
     parser.add_argument('--wo_peripheral_configuration', action='store_true',
-                        help='remove peripheral node configuration from model')
-    parser.add_argument("--wo_path_encoding", action="store_true", help="remove path encoding from model")
-    parser.add_argument("--wo_edge_feature", action="store_true", help="remove edge feature from model")
-    parser.add_argument("--num_hop1_edge", type=int, default=1, help="number of edge type in hop 1")
-    parser.add_argument("--num_layer", type=int, default=6, help="number of layer for feature encoder")
+                        help='If true, remove peripheral node configuration from model')
+    parser.add_argument("--wo_path_encoding", action="store_true", help="If true, remove path encoding from model")
+    parser.add_argument("--wo_edge_feature", action="store_true", help="If true, remove edge feature from model")
+    parser.add_argument("--num_hop1_edge", type=int, default=1, help="Number of edge type in hop 1")
+    parser.add_argument("--num_layer", type=int, default=6, help="Number of layer for feature encoder")
     parser.add_argument("--JK", type=str, default="concat",
                         choices=("sum", "max", "mean", "attention", "last", "concat"), help="Jumping knowledge method")
-    parser.add_argument("--residual", action="store_true", help="Whether to use residual connection between each layer")
-    parser.add_argument("--use_rd", action="store_true", help="Whether to add resistance distance feature to model")
+    parser.add_argument("--residual", action="store_true", help="If true, use residual connection between each layer")
+    parser.add_argument("--use_rd", action="store_true", help="If true, add resistance distance feature to model")
     parser.add_argument("--virtual_node", action="store_true",
-                        help="Whether add virtual node information in each layer")
-    parser.add_argument("--eps", type=float, default=0., help="Initital epsilon in GIN")
-    parser.add_argument("--train_eps", action="store_true", help="Whether the epsilon is trainable")
+                        help="If true, add virtual node information in each layer")
+    parser.add_argument("--eps", type=float, default=0., help="Initial epsilon in GIN")
+    parser.add_argument("--train_eps", action="store_true", help="If true, the epsilon is trainable")
     parser.add_argument("--combine", type=str, default="geometric", choices=("attention", "geometric"),
-                        help="Jumping knowledge method")
+                        help="Combine method in k-hop aggregation")
     parser.add_argument("--pooling_method", type=str, default="sum", choices=("mean", "sum", "attention"),
-                        help="pooling method in graph classification")
+                        help="Pooling method in graph classification")
     parser.add_argument('--norm_type', type=str, default="Batch",
                         choices=("Batch", "Layer", "Instance", "GraphSize", "Pair"),
-                        help="normalization method in model")
+                        help="Normalization method in model")
     parser.add_argument('--factor', type=float, default=0.5,
-                        help='factor in the ReduceLROnPlateau learning rate scheduler')
+                        help='Factor in the ReduceLROnPlateau learning rate scheduler')
     parser.add_argument('--patience', type=int, default=10,
-                        help='patience in the ReduceLROnPlateau learning rate scheduler')
-    parser.add_argument('--reprocess', action="store_true", help='Whether to reprocess the dataset')
-    parser.add_argument('--runs', type=int, default=4, help='number of repeat run')
+                        help='Patience in the ReduceLROnPlateau learning rate scheduler')
+    parser.add_argument('--reprocess', action="store_true", help='If true, reprocess the dataset')
+    parser.add_argument('--runs', type=int, default=4, help='Number of repeat run')
 
     args = parser.parse_args()
     if args.wo_path_encoding:
@@ -182,13 +184,6 @@ def main():
         log.info(f'Using single-gpu training')
         args.parallel = False
         loader = DataLoader
-
-    # Set random seed
-    log.info(f'Using random seed {args.seed}...')
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
 
     def multihop_transform(g):
         return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
@@ -231,6 +226,10 @@ def main():
     test_perfs = []
     vali_perfs = []
     for run in range(1, args.runs + 1):
+        # Set random seed
+        seed = train_utils.get_seed(args.seed)
+        log.info(f'Using random seed {seed}...')
+        seed_everything(seed)
 
         model = get_model(args)
         model.to(device)

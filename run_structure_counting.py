@@ -13,17 +13,24 @@ tasks = [0, 1, 2, 3]
 ks = [1, 2, 3, 4]
 grid = product(ks, tasks)
 
+
 if parallel:
     for parameter in grid:
         k, task = parameter
-        script = f"python train_structure_counting.py --task={str(task)} --K={k} --num_layer={k} --parallel"
+        #KPGIN-prime
+        script = f"python train_structure_counting.py --task={str(task)} --K={k} --num_layer=2 --model_name=KPGINPrime --wo_path_encoding --parallel "
         os.system(script)
-        script = f"python train_structure_counting.py --task={str(task)} --K={k} --num_layer={k} --wo_path_encoding --parallel"
+        #KGIN-prime
+        script = f"python train_structure_counting.py --task={str(task)} --K={k} --num_layer=2 --model_name=KPGINPrime " \
+                 f"--wo_peripheral_edge --wo_peripheral_configuration --wo_path_encoding --parallel "
         os.system(script)
 else:
     for parameter in grid:
         k, task = parameter
-        script = f"python train_structure_counting.py --task={str(task)} --K={k} --num_layer={k}"
+        #KPGIN-prime
+        script = f"python train_structure_counting.py --task={str(task)} --K={k} --num_layer=2 --model_name=KPGINPrime --wo_path_encoding"
         os.system(script)
-        script = f"python train_structure_counting.py --task={str(task)} --K={k} --num_layer={k} --wo_path_encoding"
+        #KGIN-prime
+        script = f"python train_structure_counting.py --task={str(task)} --K={k} --num_layer=2 --model_name=KPGINPrime " \
+                 f"--wo_peripheral_edge --wo_peripheral_configuration --wo_path_encoding"
         os.system(script)

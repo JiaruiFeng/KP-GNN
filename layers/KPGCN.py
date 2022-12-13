@@ -11,9 +11,9 @@ from .combine import *
 def degree(index, num_nodes, index_mask):
     """Compute degree in multi-hop setting
     Args:
-        index(torch.tensor): index record the node at the end of edge
-        num_nodes(int): number of nodes in the graph
-        index_mask(torch.tensor): mask for each hop
+        index (torch.tensor): index record the node at the end of edge
+        num_nodes (int): number of nodes in the graph
+        index_mask (torch.tensor): mask for each hop
     """
     # index E
     # index_mask E*K
@@ -29,12 +29,12 @@ class KPGCNConv(MessagePassing):
     """
     KP-GNN with GCN kernel
     Args:
-        input_size(int): the size of input feature
-        output_size(int): the size of output feature
-        K(int): number of hop to consider in Convolution layer
-        num_hop1_edge(int): number of edge type at 1 hop
-        num_pe(int): maximum number of path encoding, larger or equal to 1
-        combine(str): combination method for information in different hop. select from(geometric, attention)
+        input_size (int): the size of input feature
+        output_size (int): the size of output feature
+        K (int): number of hop to consider in Convolution layer
+        num_hop1_edge (int): number of edge type at 1 hop
+        num_pe (int): maximum number of path encoding, larger or equal to 1
+        combine (str): combination method for information in different hop. select from(geometric, attention)
     """
 
     def __init__(self, input_size, output_size, K, num_hop1_edge=1, num_pe=1, combine="geometric"):
@@ -47,9 +47,6 @@ class KPGCNConv(MessagePassing):
 
         self.hop_proj = nn.Linear(input_size, output_size)
 
-        # edge embedding for 1-hop and k-hop
-        # Notice that in hops larger than one, there is no actually edge feature, therefore need addtional embedding layer to encode
-        # self defined features like path encoding
 
         self.hop1_edge_emb = torch.nn.Embedding(num_hop1_edge + 2, self.output_dk, padding_idx=0)
         # If K larger than 1, define additional embedding and combine function

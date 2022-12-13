@@ -5,10 +5,11 @@ import logging
 import os
 import queue
 import shutil
-
+from time import time
 import torch
 from sklearn.model_selection import StratifiedKFold, KFold
 from tqdm import tqdm
+import torch_geometric
 
 
 class AverageMeter:
@@ -373,3 +374,13 @@ def count_parameters(model):
     """
     # For counting number of parameteres: need to remove unnecessary DiscreteEncoder, and other additional unused params
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def get_seed(seed=234):
+    """return random seed based on current time
+    Args:
+        seed(int): base seed
+    """
+    t = int(time() * 1000.0)
+    seed = seed + ((t & 0xff000000) >> 24) + ((t & 0x00ff0000) >> 8) + ((t & 0x0000ff00) << 8) + ((t & 0x000000ff) << 24)
+    return seed

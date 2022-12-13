@@ -1,10 +1,10 @@
 # How powerful are K-hop message passing graph neural networks
 This repository is the official implementation of the model in the [**How powerful are K-hop message passing graph neural networks**](https://openreview.net/forum?id=nN3aVRQsxGd&noteId=TBGwgubYuA6)
 ## News
-In version 3.0 we add support for multi-gpu training with DataParallel in torch. Code will auto-detect gpu devices in your machine. To use multi-gpu training, simply add `--parallel`. For example:
-```
-python train_CSL.py --parallel
-```
+In version 4.0, we:
+* add a new model variant called KP-GIN', which only run KP-GIN at the first layer and use normal GIN at the rest of model. This model hugely reduce the variance of normal K-hop GNN but still achieve great result in real-world datasets.
+* Fix the loss computation bug in **counting substructure dataset**. We will post the updated results in the latest version as soon as possible. 
+* Fix minor bugs.
 ## Requirements
 ```
 python=3.8
@@ -32,13 +32,28 @@ To run KP-GIN+, set:
 ```
 --model_name=KPGINPlus
 ```
+To run KP-GIN', set:
+```
+--model_name=KPGINPrime
+```
 To run normal K-hop GNN, set:
 ```
 --wo_peripheral_edge --wo_peripheral_configuration 
 ```
+Parallel training:
+```
+python train_CSL.py --parallel
+```
 For more details about these models and parameters, please check our paper.
 
 ### Simulation datasets for validating expressive power
+Simulation of regular graph:
+```
+# node level
+python run_simulation.py --n 20 40 80 160 320 640 1280 --save_appendix=_node --N=10
+# graph level
+python run_simulation.py --n 20 40 80 160 320 640 1280 --save_appendix=_graph --N=100 --graph
+```
 EXP dataset:
 ```
 # run single model
@@ -109,7 +124,8 @@ python run_qm9_search.py --parallel
 ```
 Run ZINC dataset:
 ```
-python train_ZINC.py --residual
+python train_ZINC.py --residual --K=8 --model_name=KPGINPlus --num_layer=8 --hidden_size=104
+python train_ZINC.py --K=16 --num_layer=17 --hidden_size=96 --residual --model_name=KPGINPrime
 ```
 ## Reference
 If you find the code useful, please cite our paper:

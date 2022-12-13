@@ -10,11 +10,11 @@ from .combine import *
 class KPGINPlusConv(MessagePassing):
     """KP-GNN with GIN plus convolution kernel
     Args:
-        input_size(int): the size of input feature
-        output_size(int): the size of output feature
-        K(int): number of hop to consider in Convolution layer
-        num_hop1_edge(int): number of edge type at 1 hop
-        num_pe(int): maximum number of path encoding, larger or equal to 1
+        input_size (int): the size of input feature
+        output_size (int): the size of output feature
+        K (int): number of hop to consider in Convolution layer
+        num_hop1_edge (int): number of edge type at 1 hop
+        num_pe (int): maximum number of path encoding, larger or equal to 1
     """
 
     def __init__(self, input_size, output_size, K, num_hop1_edge=1, num_pe=1, combine="independent"):
@@ -29,9 +29,6 @@ class KPGINPlusConv(MessagePassing):
                                  nn.BatchNorm1d(output_size),
                                  nn.ReLU())
 
-        # edge embedding for 1-hop and k-hop
-        # Notice that in hop, there is no actually edge feature, therefore need addtional embedding layer to encode
-        # self defined features like path encoding
         self.hop1_edge_emb = torch.nn.Embedding(num_hop1_edge + 2, input_size, padding_idx=0)
         if self.K > 1:
             self.hopk_edge_emb = torch.nn.Embedding(num_pe + 2, input_size, padding_idx=0)
@@ -58,7 +55,7 @@ class KPGINPlusConv(MessagePassing):
             self.combine.reset_parameters()
 
     def weights_init(self, m):
-        if isinstance(m, nn.Linear):
+        if hasattr(m, "reset_parameters"):
             m.reset_parameters()
 
     def forward(self, x, edge_index, edge_attr, pe_attr=None, peripheral_attr=None):

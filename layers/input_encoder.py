@@ -1,15 +1,17 @@
 """
-different encoder for different dataset
+different input encoder for different dataset
 """
 
 import torch
 import torch.nn as nn
-from ogb.utils.features import get_atom_feature_dims
-
-full_atom_feature_dims = get_atom_feature_dims()
 
 
 class EmbeddingEncoder(nn.Module):
+    """Encoder with embedding layer
+    Args:
+        input_size (int): input size of feature
+        hidden_size (int): hidden size of encoder
+    """
     def __init__(self, input_size, hidden_size):
         super(EmbeddingEncoder, self).__init__()
         self.init_proj = nn.Embedding(input_size, hidden_size)
@@ -22,6 +24,11 @@ class EmbeddingEncoder(nn.Module):
 
 
 class LinearEncoder(nn.Module):
+    """Encoder with linear projection layer
+    Args:
+        input_size (int): input size of feature
+        hidden_size (int): hidden size of encoder
+    """
     def __init__(self, input_size, hidden_size):
         super(LinearEncoder, self).__init__()
         self.init_proj = nn.Linear(input_size, hidden_size)
@@ -34,6 +41,11 @@ class LinearEncoder(nn.Module):
 
 
 class QM9InputEncoder(nn.Module):
+    """Input encoder for QM9 dataset
+    Args:
+        hidden_size (int): hidden size of encoder
+        use_pos (bool): If true, add 3D position information
+    """
     def __init__(self, hidden_size, use_pos=False):
         super(QM9InputEncoder, self).__init__()
         self.use_pos = use_pos
@@ -71,32 +83,3 @@ class QM9InputEncoder(nn.Module):
 
         x = self.init_proj(x)
         return x
-
-
-class AtomEncoder(torch.nn.Module):
-    """Atom encoder. Adapted from https://github.com/snap-stanford/ogb/blob/master/ogb/graphproppred/mol_encoder.py
-    Args:
-        hidden_size: hidden dimension of embedding
-
-    """
-
-    def __init__(self, hidden_size):
-        super(AtomEncoder, self).__init__()
-
-        self.atom_embedding_list = torch.nn.ModuleList()
-
-        for i, dim in enumerate(full_atom_feature_dims):
-            emb = torch.nn.Embedding(dim, hidden_size)
-            self.atom_embedding_list.append(emb)
-
-    def reset_parameters(self):
-        for emb in self.atom_embedding_list:
-            emb.reset_parameters()
-
-    def forward(self, data):
-        x = data.x
-        x_embedding = 0
-        for i in range(x.shape[-1]):
-            x_embedding += self.atom_embedding_list[i](x[..., i])
-
-        return x_embedding

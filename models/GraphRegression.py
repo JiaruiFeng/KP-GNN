@@ -10,8 +10,8 @@ class GraphRegression(nn.Module):
     def __init__(self, embedding_model, pooling_method):
         """framework for graph regression
         Args:
-            embedding_model(nn.Module):  graph neural network embedding model
-            pooling_method(str): graph pooling method
+            embedding_model (nn.Module):  graph neural network embedding model
+            pooling_method (str): graph pooling method
         """
         super(GraphRegression, self).__init__()
         self.embedding_model = embedding_model

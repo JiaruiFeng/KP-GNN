@@ -10,9 +10,9 @@ class GraphClassification(nn.Module):
     def __init__(self, embedding_model, pooling_method, output_size):
         """framework for graph classification
         Args:
-            embedding_model(nn.Module):  graph neural network embedding model
-            pooling_method(str): graph pooling method
-            output_size(int): output size, equal to the number of class for classification
+            embedding_model (nn.Module):  graph neural network embedding model
+            pooling_method (str): graph pooling method
+            output_size (int): output size, equal to the number of class for classification
         """
         super(GraphClassification, self).__init__()
         self.embedding_model = embedding_model

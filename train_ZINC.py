@@ -3,15 +3,14 @@ script to train on ZINC task
 """
 import argparse
 import os
-import random
 import shutil
 from json import dumps
 from time import time
 
-import numpy as np
 import torch
-import torch.optim as optim
+from torch_geometric.seed import seed_everything
 import torch_geometric.transforms as T
+from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch_geometric.loader import DataListLoader, DataLoader
 from torch_geometric.nn import DataParallel
@@ -40,7 +39,7 @@ def train(loader, model, device, optimizer, parallel=False):
             data = data.to(device)
             y = data.y
         score = model(data)
-        loss = (score - y).abs().mean()
+        loss = (score.squeeze() - y.squeeze()).abs().mean()
         loss.backward()
         optimizer.step()
         total_loss += loss.item() * num_graphs
@@ -59,7 +58,7 @@ def test(loader, model, device, parallel=False):
             data = data.to(device)
             y = data.y
         score = model(data)
-        total_mae += (score - y).abs().sum().item()
+        total_mae += (score.squeeze() - y.squeeze()).abs().sum().item()
 
     return total_mae / len(loader.dataset)
 
@@ -88,7 +87,6 @@ def get_model(args):
     model = GraphRegression(embedding_model=gnn,
                             pooling_method=args.pooling_method)
     model.reset_parameters()
-    # If use multiple gpu, torch geometric model must use DataParallel class
     if args.parallel:
         model = DataParallel(model, args.gpu_ids)
 
@@ -104,15 +102,15 @@ def edge_feature_transform(data):
 def main():
     parser = argparse.ArgumentParser(f'arguments for training and testing')
     parser.add_argument('--save_dir', type=str, default='./save', help='Base directory for saving information.')
-    parser.add_argument('--seed', type=list, default=[123, 234, 345, 456], help='Random seed for reproducibility.')
-    parser.add_argument('--dataset_name', type=str, default="ZINC", help='name of dataset')
+    parser.add_argument('--seed', type=str, default=234, help='Random seed for reproducibility.')
+    parser.add_argument('--dataset_name', type=str, default="ZINC", help='Name of dataset')
     parser.add_argument('--drop_prob', type=float, default=0.0,
                         help='Probability of zeroing an activation in dropout layers.')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size per GPU. Scales automatically when \
                             multiple GPUs are available.')
     parser.add_argument("--parallel", action="store_true",
                         help="If true, use DataParallel for multi-gpu training")
-    parser.add_argument('--num_workers', type=int, default=0, help='number of worker.')
+    parser.add_argument('--num_workers', type=int, default=0, help='Number of worker.')
     parser.add_argument('--load_path', type=str, default=None, help='Path to load as a model checkpoint.')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate.')
     parser.add_argument('--min_lr', type=float, default=1e-6, help='Minimum learning rate.')
@@ -120,10 +118,10 @@ def main():
     parser.add_argument("--kernel", type=str, default="spd", choices=("gd", "spd"),
                         help="the kernel used for K-hop computation")
     parser.add_argument('--num_epochs', type=int, default=500, help='Number of epochs.')
-    parser.add_argument("--hidden_size", type=int, default=104, help="hidden size of the model")
-    parser.add_argument("--model_name", type=str, default="KPGINPlus", choices=("KPGIN", "KPGINPlus"),
+    parser.add_argument("--hidden_size", type=int, default=104, help="Hidden size of the model")
+    parser.add_argument("--model_name", type=str, default="KPGINPlus", choices=("KPGIN", "KPGINPlus", "KPGINPrime"),
                         help="Base GNN model")
-    parser.add_argument("--K", type=int, default=8, help="number of hop to consider")
+    parser.add_argument("--K", type=int, default=8, help="Number of hop to consider")
     parser.add_argument("--max_pe_num", type=int, default=50,
                         help="Maximum number of path encoding. Must be equal to or greater than 1")
     parser.add_argument("--max_edge_type", type=int, default=3,
@@ -135,36 +133,36 @@ def main():
     parser.add_argument("--max_distance_count", type=int, default=50,
                         help="Maximum count per hop in peripheral configuration information")
     parser.add_argument('--wo_peripheral_edge', action='store_true',
-                        help='remove peripheral edge information from model')
+                        help='If true, remove peripheral edge information from model')
     parser.add_argument('--wo_peripheral_configuration', action='store_true',
-                        help='remove peripheral node configuration information from model')
+                        help='If true, remove peripheral node configuration information from model')
     parser.add_argument('--wo_path_encoding', action='store_true',
-                        help='remove path encoding information from model')
+                        help='If true, remove path encoding information from model')
     parser.add_argument('--wo_edge_feature', action='store_true',
-                        help='remove edge feature from model')
-    parser.add_argument("--num_hop1_edge", type=int, default=3, help="number of edge type in hop 1")
-    parser.add_argument("--num_layer", type=int, default=8, help="number of layer for feature encoder")
+                        help='If true, remove edge feature from model')
+    parser.add_argument("--num_hop1_edge", type=int, default=3, help="Number of edge type in hop 1")
+    parser.add_argument("--num_layer", type=int, default=8, help="Number of layer for feature encoder")
     parser.add_argument("--JK", type=str, default="concat",
                         choices=("sum", "max", "mean", "attention", "last", "concat"), help="Jumping knowledge method")
-    parser.add_argument("--residual", action="store_true", help="Whether to use residual connection between each layer")
-    parser.add_argument("--use_rd", action="store_true", help="Whether to add resistance distance feature to model")
+    parser.add_argument("--residual", action="store_true", help="If true, use residual connection between each layer")
+    parser.add_argument("--use_rd", action="store_true", help="If true, add resistance distance feature to model")
     parser.add_argument("--virtual_node", action="store_true",
-                        help="Whether add virtual node information in each layer")
-    parser.add_argument("--eps", type=float, default=0., help="Initital epsilon in GIN")
-    parser.add_argument("--train_eps", action="store_true", help="Whether the epsilon is trainable")
+                        help="If true, add virtual node information in each layer")
+    parser.add_argument("--eps", type=float, default=0., help="Initial epsilon in GIN")
+    parser.add_argument("--train_eps", action="store_true", help="If true, the epsilon in GIN model is trainable")
     parser.add_argument("--combine", type=str, default="geometric", choices=("attention", "geometric"),
-                        help="Jumping knowledge method")
+                        help="Combine method in k-hop aggregation")
     parser.add_argument("--pooling_method", type=str, default="sum", choices=("mean", "sum", "attention"),
-                        help="pooling method in graph classification")
+                        help="Pooling method in graph classification")
     parser.add_argument('--norm_type', type=str, default="Batch",
                         choices=("Batch", "Layer", "Instance", "GraphSize", "Pair"),
-                        help="normalization method in model")
+                        help="Normalization method in model")
     parser.add_argument('--factor', type=float, default=0.5,
-                        help='factor in the ReduceLROnPlateau learning rate scheduler')
+                        help='Factor in the ReduceLROnPlateau learning rate scheduler')
     parser.add_argument('--patience', type=float, default=10,
-                        help='factor in the ReduceLROnPlateau learning rate scheduler')
-    parser.add_argument('--reprocess', action="store_true", help='Whether to reprocess the dataset')
-    parser.add_argument('--runs', type=int, default=4, help='number of repeat run')
+                        help='Patience in the ReduceLROnPlateau learning rate scheduler')
+    parser.add_argument('--reprocess', action="store_true", help='If true, reprocess the dataset')
+    parser.add_argument('--runs', type=int, default=4, help='Number of repeat run')
 
     args = parser.parse_args()
     if args.wo_path_encoding:
@@ -189,8 +187,6 @@ def main():
         log.info(f'Using single-gpu training')
         args.parallel = False
         loader = DataLoader
-
-
 
     def multihop_transform(g):
         return extract_multi_hop_neighbors(g, args.K, args.max_pe_num, args.max_hop_num, args.max_edge_type,
@@ -233,31 +229,26 @@ def main():
     vali_perfs = []
     for run in range(1, args.runs + 1):
         # Set random seed
-        log.info(f'Using random seed {args.seed[run-1]}...')
-        random.seed(args.seed[run-1])
-        np.random.seed(args.seed[run-1])
-        torch.manual_seed(args.seed[run-1])
-        torch.cuda.manual_seed_all(args.seed[run-1])
+        seed = train_utils.get_seed(args.seed)
+        log.info(f'Using random seed {seed}...')
+        seed_everything(seed)
 
         # Get your model
         log.info('Building model...')
         model = get_model(args)
         model.to(device)
-        model.train()
-        # ema=train_utils.EMA(model, args.ema_decay)
 
         pytorch_total_params = count_parameters(model)
         log.info(f'The total parameters of model :{[pytorch_total_params]}')
 
-        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.l2_wd)
+        optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.l2_wd)
         scheduler = ReduceLROnPlateau(
             optimizer, mode="min", factor=args.factor, patience=args.patience)
 
         # cri=nn.L1Loss()
         # Train
         log.info('Training GNN model...')
-        best_valid_perf = 1E6
-        best_test_perf = None
+        best_valid_perf = best_test_perf = float('inf')
         epoch = 0
         start_outer = time()
         try:
@@ -289,12 +280,12 @@ def main():
         test_perfs.append(best_test_perf)
         vali_perfs.append(best_valid_perf)
 
-        test_perf = torch.tensor(test_perfs)
-        vali_perf = torch.tensor(vali_perfs)
-        log.info("-" * 50)
-        # logger.info(cfg)
-        log.info(
-            f'Final Vali: {vali_perf.mean():.4f} ± {vali_perf.std():.4f}, Final Test: {test_perf.mean():.4f} ± {test_perf.std():.4f}')
+    test_perf = torch.tensor(test_perfs)
+    vali_perf = torch.tensor(vali_perfs)
+    log.info("-" * 50)
+    # logger.info(cfg)
+    log.info(
+        f'Final Vali: {vali_perf.mean():.4f} ± {vali_perf.std():.4f}, Final Test: {test_perf.mean():.4f} ± {test_perf.std():.4f}')
 
     return
 

@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import torch.nn.functional as F
-from torch_geometric.data import DataLoader
+from torch_geometric.loader import DataLoader
 from torch_geometric.nn import MessagePassing, global_add_pool
 from torch_geometric.utils import from_networkx
 
@@ -180,17 +180,17 @@ def compute_simulation_collisions(outputs, ratio=True):
 
 parser = argparse.ArgumentParser(description='Node configuration Simulation Experiment')
 parser.add_argument('--R', type=int, default=3,
-                    help='node degree (r) or synthetic r-regular graph')
+                    help='Node degree (r) or synthetic r-regular graph')
 parser.add_argument('--n', nargs='*',
-                    help='a list of number of nodes in each connected k-regular subgraph')
+                    help='A list of number of nodes in each connected k-regular subgraph')
 parser.add_argument('--N', type=int, default=100,
-                    help='number of graphs in simultation')
+                    help='Number of graphs in simultation')
 parser.add_argument('--K', type=int, default=6,
-                    help='largest number of hop to consider')
+                    help='Largest number of hop to consider')
 parser.add_argument('--graph', action='store_true', default=False,
-                    help='if True, compute whole-graph collision rate; otherwise node')
+                    help='If True, compute whole-graph collision rate; otherwise node')
 parser.add_argument('--save_appendix', default='',
-                    help='what to append to save-names when saving results')
+                    help='What to append to save-names when saving results')
 args = parser.parse_args()
 args.n = [int(n) for n in args.n]
 
