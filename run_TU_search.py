@@ -8,8 +8,7 @@ parser.add_argument("--parallel", action="store_true",
 parallel_arg = parser.parse_args()
 parallel = parallel_arg.parallel
 
-#datasets = ["MUTAG", "DD", "PROTEINS", "PTC", "IMDBBINARY"]
-datasets = ["MUTAG"]
+datasets = ["MUTAG", "DD", "PROTEINS", "PTC", "IMDBBINARY"]
 models = ["KPGCN", "KPGIN", "KPGraphSAGE"]
 grid = product(datasets, models)
 
