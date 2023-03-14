@@ -60,7 +60,7 @@ def test(loader, model, task, device, parallel=False):
             data = data.to(device)
             y = data.y
         total_error += (model(data).squeeze() - y[:, task:task + 1].squeeze()).square().sum().item()
-    return -np.log10(total_error / len(loader.dataset))
+    return np.log10(total_error / len(loader.dataset))
 
 
 def get_model(args):
