@@ -73,7 +73,7 @@ def extract_multi_hop_neighbors(data, K, max_edge_attr_num, max_hop_num,
         # create K-hop edge with sortest path distance kernel
         final_adj = exist_adj
 
-    g = nx.from_numpy_matrix(final_adj.numpy(), create_using=nx.DiGraph)
+    g = nx.from_numpy_array(final_adj.numpy(), create_using=nx.DiGraph)
     edge_list = g.edges
     edge_index = torch.from_numpy(np.array(edge_list).T).long()
 
@@ -188,7 +188,7 @@ def extract_peripheral_attr_v2(adj, k_adj, max_hop_num, max_edge_type, max_edge_
         if num_sub_nodes < 2:
             continue
         peripheral_subgraph = adj[row][:, row]
-        s = nx.from_numpy_matrix(peripheral_subgraph.numpy(), create_using=nx.DiGraph)
+        s = nx.from_numpy_array(peripheral_subgraph.numpy(), create_using=nx.DiGraph)
         s_edge_list = list(nx.get_edge_attributes(s, "weight").values())
         if len(s_edge_list) == 0:
             continue
