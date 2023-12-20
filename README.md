@@ -2,8 +2,8 @@
 This repository is the official implementation of the model in the [**How powerful are K-hop message passing graph neural networks**](https://openreview.net/forum?id=nN3aVRQsxGd&noteId=TBGwgubYuA6)
 ## News
 In version 4.0, we:
-* add a new model variant called KP-GIN', which only run KP-GIN at the first layer and use normal GIN at the rest of model. This model hugely reduce the variance of normal K-hop GNN but still achieve great result in real-world datasets.
-* Fix the loss computation bug in **counting substructure dataset**. We will post the updated results in the latest version as soon as possible. 
+* add a new model variant called KP-GIN', which only runs KP-GIN at the first layer and uses normal GIN at the rest of the model. This model hugely reduces the variance of normal K-hop GNN but still achieves great results in real-world datasets.
+* Fix the loss computation bug in **counting substructure dataset**. 
 * Fix minor bugs.
 ## Requirements
 ```
@@ -18,7 +18,7 @@ Switch between the shortest path distance kernel and graph diffusion kernel:
 --kernel=spd
 --kernel=gd
 ```
-Use different number of hop:
+Use different numbers of hop:
 ```
 --K=6
 ```
@@ -74,7 +74,7 @@ python run_SR_search.py --parallel
 ```
 CSL dataset:
 ```
-# run single model
+# run a single model
 python train_CSL.py
 
 # search for different K and model
@@ -88,7 +88,7 @@ Node/graph properties:
 # single task
 python train_graph_property.py --task=0
 python train_node_property.py --task=0
-# run all tasks with search
+# run all tasks with a search
 python run_graph_node_property.py
 # multi-gpu
 python run_graph_node_property.py --parallel
@@ -97,12 +97,12 @@ Substructure counting:
 ```
 # single task
 python train_structure_counting.py --task=0
-# run all tasks with search
+# run all tasks with a search
 python run_structure_counting.py
 #multi-gpu
 python run_structure_counting.py --parallel
 ```
-### Real world datasets
+### Real-world datasets
 Run MUTAG dataset with 3-hop KP-GCN:
 ```
 python train_TU.py --dataset_name=MUTAG --model_name=KPGCN --K=3 --kernel=spd
